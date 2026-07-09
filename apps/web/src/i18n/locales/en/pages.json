@@ -960,7 +960,7 @@
       "head": "Appearance",
       "lede": "How Heartmorrow looks and reads — these apply across the whole app, not just your phone.",
       "language": "Interface language",
-      "languageHint": "The language of the interface. Conversations and stories still play out in English, unless the character's profile specifically instructs them to speak another language.",
+      "languageHint": "The language used throughout the interface and for AI-generated conversations and stories.",
       "accent": "Accent color",
       "accentHint": "Tints highlights, buttons, and romance cues throughout the app.",
       "accentCustom": "Custom tint",
