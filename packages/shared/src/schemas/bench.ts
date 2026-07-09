@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { PromptOverrideMapSchema } from './prompts';
+import { StructuredOutputModeSchema } from './settings';
 
 /**
  * Heartmorrow Bench — the model-evaluation harness.
@@ -21,6 +22,19 @@ export const BenchCaseKindSchema = z.enum([
   'generation', // a one-shot structured generation (world, shop items, day recap…) — validity + cost
 ]);
 export type BenchCaseKind = z.infer<typeof BenchCaseKindSchema>;
+
+/**
+ * Cross-cutting tags that group cases into run presets BEYOND `kind` (which only
+ * separates judge/dialogue/generation). A single `generation` case can be a
+ * structured content generator or a pure-prose writer; tags let the UI offer
+ * "run all the generators" / "run all the prose" quick-selects. A case may carry
+ * zero tags (e.g. the extraction cases fit neither bucket).
+ */
+export const BenchCaseTagSchema = z.enum([
+  'generator', // structured world/content generators (world, locations, items, companies, characters, quizzes…)
+  'prose', // free-form narrative/flavor prose (recaps, color passes, dispatches, chronicles, feed posts…)
+]);
+export type BenchCaseTag = z.infer<typeof BenchCaseTagSchema>;
 
 /**
  * Describes the human-baseline control a judge case exposes in the UI. The bench
@@ -91,6 +105,8 @@ export const BenchCaseMetaSchema = z.object({
   kind: BenchCaseKindSchema,
   /** UI grouping label (e.g. "Judges & scoring"). */
   group: z.string(),
+  /** Cross-cutting tags for run presets ("Generators" / "Prose"); may be empty. */
+  tags: z.array(BenchCaseTagSchema).default([]),
   /** The human-baseline control for judge cases; null when the case has no baseline. */
   baselineSpec: BenchBaselineSpecSchema.nullable().default(null),
   /** A short instruction shown above the baseline control ("Score the date as you'd judge it"). */
@@ -163,6 +179,15 @@ export const BenchCallMetricSchema = z.object({
   attempts: z.number().int().default(1),
   ok: z.boolean(),
   tokensPerSec: z.number().nullable().default(null),
+  /** The time (ms) `tokensPerSec` is computed over: the endpoint's reported
+   *  GENERATION time when it provides per-response stats (decode only — excludes
+   *  prompt prefill + transport), otherwise the full round-trip `latencyMs` as a
+   *  fallback. 0 for calls that produced no tokens. Rollups sum this so a combined
+   *  rate stays correct. */
+  genTimeMs: z.number().default(0),
+  /** True when `genTimeMs`/`tokensPerSec` came from endpoint-reported generation
+   *  stats (a real decode rate) rather than the end-to-end latency fallback. */
+  speedMeasured: z.boolean().default(false),
 });
 export type BenchCallMetric = z.infer<typeof BenchCallMetricSchema>;
 
@@ -202,6 +227,20 @@ export const BenchComparisonSchema = z.object({
 });
 export type BenchComparison = z.infer<typeof BenchComparisonSchema>;
 
+/**
+ * Which structured-output mode a case's calls actually used. `requested` is the
+ * configured starting mode; `final` is the mode that produced output after any
+ * response-format downgrades (json_schema → json_object → prompt_only). When
+ * `final !== requested` the endpoint couldn't serve the requested mode and the case
+ * FELL BACK — this is surfaced as a capability signal, never counted as a failure.
+ * Null on cases that make no structured calls (the free-text dialogue cases).
+ */
+export const BenchStructuredModeSchema = z.object({
+  requested: StructuredOutputModeSchema,
+  final: StructuredOutputModeSchema,
+});
+export type BenchStructuredMode = z.infer<typeof BenchStructuredModeSchema>;
+
 /** The full result of running one case. */
 export const BenchCaseResultSchema = z.object({
   caseId: z.string(),
@@ -218,6 +257,16 @@ export const BenchCaseResultSchema = z.object({
   attempts: z.number().int().default(0),
   tokensPerSec: z.number().nullable().default(null),
   tokensEstimated: z.boolean().default(false),
+  /** Total decode time (ms) `tokensPerSec` is computed over — Σ of the case's
+   *  token-bearing calls' `genTimeMs` (endpoint-measured generation time when
+   *  available, else round-trip latency). Lets the run aggregate compose a correct
+   *  token-weighted rate across cases. */
+  genTimeMs: z.number().default(0),
+  /** True when this case's `tokensPerSec` is an endpoint-measured decode rate
+   *  (every token-bearing call reported generation stats); false when it fell back
+   *  to end-to-end latency (which includes prompt processing + transport, so it
+   *  under-reports true generation speed). */
+  speedMeasured: z.boolean().default(false),
   /** Pretty-printed structured output (judge/generation). */
   output: z.string().default(''),
   /** Generated dialogue (dialogue cases). */
@@ -226,6 +275,9 @@ export const BenchCaseResultSchema = z.object({
   repetitionAvg: z.number().nullable().default(null),
   /** Human-vs-model scoring (judge cases with a baseline set). */
   comparison: BenchComparisonSchema.nullable().default(null),
+  /** The structured-output mode this case ran at, and whether it had to fall back
+   *  from the requested mode. Null for free-text dialogue cases (no structured call). */
+  structuredMode: BenchStructuredModeSchema.nullable().default(null),
 });
 export type BenchCaseResult = z.infer<typeof BenchCaseResultSchema>;
 
@@ -244,6 +296,19 @@ export const BenchAggregateSchema = z.object({
   avgCloseness: z.number().nullable().default(null),
   /** True when any case fell back to chars/4 token estimates. */
   tokensEstimated: z.boolean().default(false),
+  /** True when any token-bearing case's tok/sec is an end-to-end-latency estimate
+   *  rather than an endpoint-measured decode rate — so the UI can flag the speed
+   *  numbers. Endpoints like LM Studio's native API report real per-response stats;
+   *  configuring the best available API in Settings makes these numbers accurate. */
+  speedEstimated: z.boolean().default(false),
+  /** How many cases had to fall back from their requested structured-output mode
+   *  (json_schema → json_object/prompt_only). A fallback is NOT a failure — it means
+   *  the endpoint couldn't serve the requested mode, so the case still ran but at a
+   *  looser structured contract. */
+  structuredFallbacks: z.number().int().default(0),
+  /** Of the fell-back cases, how many ended on each mode (e.g. { json_object: 2,
+   *  prompt_only: 1 }) — keyed by `BenchStructuredMode.final`. */
+  fallbackByMode: z.record(z.string(), z.number().int()).default({}),
 });
 export type BenchAggregate = z.infer<typeof BenchAggregateSchema>;
 

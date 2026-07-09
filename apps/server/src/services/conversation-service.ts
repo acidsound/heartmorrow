@@ -9,6 +9,7 @@ import {
   PlayerBreakupReactionSchema,
   PlayerFarewellReactionSchema,
   PROMPT_LIMITS,
+  GEN_TEXT,
   DEFAULT_PLAYER_ID,
   LAST_SEEN_FLAG,
   KNOWLEDGE_GOSSIP_MIN_FIDELITY,
@@ -79,6 +80,8 @@ import {
   dateNeedFor,
   getRapport,
   peekRapport,
+  peekExpression,
+  setLastExpression,
   applyTurnEngagement,
   ensureRapportSeeded,
   rapportLabel,
@@ -108,20 +111,36 @@ import { localizedText, withLocaleInstruction } from '../i18n/locale';
 import { getAdapter } from '../llm/provider';
 import type { ChatMessage } from '../llm/types';
 import { ThinkStripper, stripThink } from '../lib/think-filter';
+import { withKeyedLock } from '../lib/keyed-lock';
 
 // --- session CRUD -----------------------------------------------------------
 
 /**
- * Resolve the date-setup "Anywhere" choice to a concrete venue: the first FREE public
- * location, or — when the world has none free — the cheapest one the player can
- * currently afford. Throws if every venue costs more than the wallet holds (and none
- * are free), so "Anywhere" can't silently start a date you can't pay for. Returns null
- * only when the world has no venues at all (a locationless date is the fallback then).
+ * Resolve the date-setup "Anywhere" choice to a concrete venue. "Anywhere" means
+ * "surprise me", so among the FREE public venues we pick a RANDOM one for variety —
+ * not always the first in the list, which made every "Anywhere" date land at the same
+ * spot. Free venues take precedence so "Anywhere" never silently charges you when a
+ * free option exists; only when the world has NONE free do we fall back to the
+ * cheapest venue the player can currently afford (a predictable minimum spend, rather
+ * than randomly picking a pricier place and surprise-charging for it). Throws if every
+ * venue costs more than the wallet holds (and none are free), so "Anywhere" can't
+ * silently start a date you can't pay for. Returns null only when the world has no
+ * venues at all (a locationless date is the fallback then). `rng` is injectable so
+ * tests can pin the random choice.
  */
-function pickAnywhereVenue(locations: readonly Location[], money: number): string | null {
+export function pickAnywhereVenue(
+  locations: readonly Location[],
+  money: number,
+  rng: () => number = Math.random,
+): string | null {
   if (locations.length === 0) return null;
-  const free = locations.find((l) => venueCost(l.priceTier) === 0);
-  if (free) return free.id;
+  // Prefer free venues — pick a random one so "Anywhere" surprises you with a
+  // different spot each time instead of always the first free entry.
+  const free = locations.filter((l) => venueCost(l.priceTier) === 0);
+  if (free.length > 0) {
+    const idx = Math.min(free.length - 1, Math.max(0, Math.floor(rng() * free.length)));
+    return free[idx]!.id;
+  }
   // No free venue exists — fall back to the cheapest one you can afford.
   const cheapestFirst = [...locations].sort((a, b) => venueCost(a.priceTier) - venueCost(b.priceTier));
   const affordable = cheapestFirst.find((l) => venueCost(l.priceTier) <= money);
@@ -145,6 +164,18 @@ export function createSession(input: ConversationCreate): ConversationSession {
   // Real meetings (anything but a free-form chat) cost a daily action and require
   // the character to be available today (world-bound only). 'chat' is exempt.
   if (input.mode !== 'chat' && character.worldId) {
+    // One live date per world. The client guards against starting a second date
+    // (Chat.tsx `if (activeDate) return`), but that's best-effort UI state — a
+    // double-submit, a second tab, or a stale/failed active-date fetch can slip a
+    // second POST through. Enforce it authoritatively here so dates can't "stack":
+    // without this, two open sessions coexist and ending one silently resurfaces the
+    // other (getActiveDateForWorld returns them one at a time).
+    const openDate = getActiveDateForWorld(character.worldId);
+    if (openDate) {
+      throw badRequest(
+        `You're already on a date with ${openDate.characterName} — wrap that up before starting another.`,
+      );
+    }
     const day = ensureWorldState(character.worldId).day;
     // A character who just broke up with you needs space before they'll meet
     // again — keep texting them to thaw things; the date reopens after a cooldown.
@@ -173,8 +204,8 @@ export function createSession(input: ConversationCreate): ConversationSession {
     // `prop:` location you have no claim to rather than silently degrading to a
     // locationless date.
     const world = worldsRepo.get(character.worldId) ?? null;
-    // "Anywhere": auto-pick the first free public venue, else the cheapest the player
-    // can currently afford — refusing the date outright when nothing is affordable.
+    // "Anywhere": auto-pick a RANDOM free public venue (for variety), else the cheapest
+    // the player can currently afford — refusing the date outright when nothing is affordable.
     if (resolvedLocationId === 'anywhere') {
       resolvedLocationId = pickAnywhereVenue(world?.locations ?? [], getOrCreatePlayer(playerIdForWorld(character.worldId)).money);
     }
@@ -245,6 +276,7 @@ export function getActiveDateForWorld(worldId: string): ActiveDate | null {
       hasPlayerTurn: messagesRepo.hasRole(s.id, 'player'),
       rapport,
       vibe: rapport != null ? rapportLabel(rapport) : null,
+      expression: peekExpression(s.id),
       updatedAt: s.updatedAt,
     };
   }
@@ -545,6 +577,39 @@ export function persistStreamedReply(sessionId: string, text: string): Message {
 }
 
 /**
+ * Remove the session's trailing character reply so it can be REGENERATED in place
+ * (the player asked to rewrite a bad/looping line). Called inside the per-session
+ * reply lock by the regenerate route, which then re-runs `streamReply` against the
+ * now-trailing player turn — deliberately WITHOUT re-judging (the rapport already
+ * moved when the turn was first sent; a regenerate only rewrites the prose).
+ *
+ * Throws when the last message isn't a plain, regenerable character line: a player
+ * turn or narrator beat (nothing to rewrite), or a consequence-bearing line whose
+ * effects are already applied and must not be silently dropped — a walkout, a
+ * lost-interest exit, an amicable farewell, or a breakup-intent reaction.
+ */
+export function dropReplyForRegen(sessionId: string): void {
+  const session = getSession(sessionId);
+  if (session.ended) throw badRequest('This date has already ended.');
+  const messages = messagesRepo.listBySession(sessionId);
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== 'character') {
+    throw badRequest('There’s no reply here to regenerate.');
+  }
+  // Only a reply to one of YOUR turns can be regenerated — not the character's
+  // scene-opening greeting (regenerating it has no player turn to answer).
+  if (!messages.some((m) => m.role === 'player')) {
+    throw badRequest('There’s nothing of yours here for them to reply to yet.');
+  }
+  const md = last.metadata ?? {};
+  if (md.walkout || md.left || md.farewell || md.breakupIntent) {
+    throw badRequest('That line ended the date, so it can’t be regenerated.');
+  }
+  messagesRepo.delete(last.id);
+  touchSession(session);
+}
+
+/**
  * Set the scene when a date opens, so the player has something to react to.
  *
  * - On a FIRST date the character breaks the ice: a single in-character opening
@@ -594,7 +659,7 @@ export async function openConversation(sessionId: string): Promise<Message | nul
           `the atmosphere of the place, and the weather and time of day (use the scene and world details above). ` +
           `Describe ${character.name} from the OUTSIDE, by name (e.g. "${character.name} is waiting at a corner table, ..."). ` +
           `This is stage-setting prose for the player to read — NOT a spoken line: do not write any dialogue, do not speak in ` +
-          `${character.name}'s voice, no greeting, and no quotation marks. Just the scene.`,
+          `${character.name}'s voice, no greeting, and no quotation marks or *asterisks* — write it as plain third-person prose. Just the scene.`,
       });
     }
     const adapter = getAdapter(settings);
@@ -717,7 +782,7 @@ export async function attemptWalkout(
   try {
     addMemoriesFromEvaluation(
       character.id,
-      [{ text: walkoutMemory.slice(0, 400), importance: 5, tags: ['conflict'] }],
+      [{ text: walkoutMemory.slice(0, GEN_TEXT.line), importance: 5, tags: ['conflict'] }],
       walkoutEvent.id,
     );
   } catch {
@@ -808,6 +873,8 @@ export async function judgeTurn(sessionId: string, signal?: AbortSignal): Promis
   if (!result.ok) return null; // fail-safe — no rapport change
 
   const { rapport, delta } = applyTurnEngagement(sessionId, result.data.engagement, character.guardedness);
+  // Persist the mood next to rapport so a resumed date restores the portrait + chip.
+  setLastExpression(sessionId, result.data.expression);
   return {
     label: rapportLabel(rapport),
     expression: result.data.expression.trim(),
@@ -1153,11 +1220,24 @@ export async function maybeAutoSummarize(sessionId: string): Promise<void> {
 // --- end + evaluate (structured) --------------------------------------------
 
 /**
- * End a session and run the STRUCTURED evaluator. Stat/memory mutations happen
- * only if the structured result validates. On failure, no game state is
- * mutated by the evaluation (the session is still marked ended).
+ * End a session and run the STRUCTURED evaluator. The evaluator is REQUIRED to
+ * conclude a plain manual "End & evaluate": if it fails (e.g. the model is offline),
+ * the date is NOT ended — nothing is mutated and the session stays open so the player
+ * can retry once the model is back. A NARRATIVE exit (walkout / lost-interest leave /
+ * spoken farewell) has already played out in-fiction, so it still finalizes even if
+ * the eval fails — it just carries no evaluator deltas/memories. Stat/memory mutations
+ * from the evaluation happen only when the structured result validates.
  */
 export async function endSession(sessionId: string): Promise<EndSessionResponse> {
+  // Serialize the end per session under the SAME key as send/retry/regenerate, so two
+  // concurrent ends can't both evaluate + spend, an end can't interleave with a send,
+  // and the session.ended re-check inside runs against committed state. This replaces
+  // the old claimEnd flip — which had to mark the session ended BEFORE the evaluator
+  // await, the very reason a failed eval used to finalize the date anyway.
+  return withKeyedLock(`conv-reply:${sessionId}`, () => endSessionInner(sessionId));
+}
+
+async function endSessionInner(sessionId: string): Promise<EndSessionResponse> {
   const session = getSession(sessionId);
   const messages = messagesRepo.listBySession(sessionId);
 
@@ -1236,16 +1316,15 @@ export async function endSession(sessionId: string): Promise<EndSessionResponse>
     };
   }
 
-  // A real date occurred: stamp "last seen" and spend a daily action (once,
-  // before the session is marked ended). World-bound dates/events only.
+  // A real date occurred.
   const endActor = getCharacter(session.characterId);
 
-  // Read-only affordability gate FIRST (no mutation, no claim): funds were checked
-  // at createSession; re-check here in case the wallet was drained mid-date. A
-  // property you own or lease is FREE (the lease rent / purchase covers it); any
-  // other venue charges its full tier price. Refusing here — BEFORE we claim/end
-  // the session — keeps it OPEN and re-endable once funds return, rather than
-  // ending it then bouncing the charge.
+  // Read-only affordability gate FIRST (no mutation): funds were checked at
+  // createSession; re-check here in case the wallet was drained mid-date. A property
+  // you own or lease is FREE (the lease rent / purchase covers it); any other venue
+  // charges its full tier price. Refusing here — BEFORE we spend/end anything — keeps
+  // the date OPEN and re-endable once funds return, rather than ending it then
+  // bouncing the charge.
   let pendingCharge: { worldId: string; cost: number; pid: string } | null = null;
   if (endActor.worldId && (session.mode === 'date' || session.mode === 'event')) {
     const venue = resolveSessionLocation(session.locationId, endActor, worldsRepo.get(endActor.worldId) ?? null);
@@ -1260,56 +1339,29 @@ export async function endSession(sessionId: string): Promise<EndSessionResponse>
     pendingCharge = { worldId: endActor.worldId, cost, pid };
   }
 
-  // Atomically claim the session BEFORE the (multi-second) evaluator await below.
-  // Without this, two concurrent end requests (double-click, retry on a slow eval,
-  // or an auto-end racing a manual end) would BOTH pass the `session.ended` guard
-  // above, BOTH spend money/stamina, and BOTH apply the evaluation. claimEnd flips
-  // ended 0->1 in one statement; a request that loses the claim bails here.
-  if (!sessionsRepo.claimEnd(session.id)) {
-    clearRapport(sessionId);
-    return {
-      session: { ...session, ended: true },
-      evaluated: false,
-      relationship: null,
-      mood: null,
-      expression: null,
-      summaryLine: null,
-      memoriesWritten: 0,
-      evalError: 'This date has already ended.',
-      jealousy: null,
-      milestone: null,
-      breakup: null,
-      onTheRocks: false,
-      reconciled: false,
-      ending: null,
-    };
-  }
-
-  // Claimed: commit the one-time end costs (runs exactly once per session).
-  if (endActor.worldId) {
-    stampLastDate(session.characterId, ensureWorldState(endActor.worldId).day);
-    if (pendingCharge) {
-      spendStamina(pendingCharge.worldId);
-      if (pendingCharge.cost > 0) spendMoney(pendingCharge.cost, pendingCharge.pid);
-    }
-  }
-
-  // Emotional state carried INTO this date should be resolved by having had it
-  // out here — but jealousy freshly discovered just below must persist to color
-  // the NEXT date, so capture the pre-roll state first.
+  // Emotional state carried INTO this date should be resolved by having had it out
+  // here — captured (read-only) before any mutation. Jealousy freshly discovered
+  // below must persist to color the NEXT date, so record the pre-roll state now.
   const incomingFlags = getRelationship(session.characterId).flags;
   const incomingJealous = incomingFlags['state:jealous'] === true;
   const incomingOffended = incomingFlags['state:offended'] === true;
   // A date that ENDED in a walkout (the character stormed out this very session)
   // shouldn't have that fresh offense "aired out" by the same eval — they carry it
-  // INTO the next date. Detect it from the walkout farewell's metadata so the
-  // grievance attemptWalkout just set survives, and so a cruel night doesn't also
-  // heal the despair spiral like a normal evening together would.
+  // INTO the next date. Detect it from the walkout message's metadata so the grievance
+  // attemptWalkout just set survives, and so a cruel night doesn't also heal the
+  // despair spiral like a normal evening together would.
   const endedInWalkout = messages.some((m) => m.role === 'character' && m.metadata?.['walkout'] === true);
+  // A NARRATIVE exit (walkout / lost-interest leave / spoken farewell) has already
+  // played out in-fiction — the character is gone, so the date CANNOT resume and must
+  // finalize even if the evaluator fails (it just carries no eval deltas). A plain
+  // manual "End & evaluate" has no such marker; for it the evaluator is REQUIRED.
+  const forcedEnd =
+    endedInWalkout ||
+    messages.some((m) => m.role === 'character' && (m.metadata?.['farewell'] === true || m.metadata?.['left'] === true));
 
-  // A monogamous character may "find out" about other people you've seen lately.
-  const jealousy = maybeRollJealousy(getCharacter(session.characterId));
-
+  // --- The evaluator concludes the date. Run it FIRST and, for a manual end, finalize
+  //     NOTHING until it succeeds — so a model outage leaves the date OPEN and
+  //     re-endable rather than silently ending it un-evaluated. ---
   const settings = getLlmSettings();
   const evalMessages = messages.slice(-50);
   const ctx = buildPromptContextForSession(session, evalMessages);
@@ -1325,19 +1377,62 @@ export async function endSession(sessionId: string): Promise<EndSessionResponse>
     minMaxTokens: 3000,
   });
 
-  // This real session is ending → decay temporary buffs by one session NOW that the
-  // evaluator (which ran with them still active) is done. Done once, on BOTH the
-  // success and failure paths, so the README contract ("buffs decay when a session
-  // ends") holds even when the eval call fails.
+  if (!result.ok) recordEvent('session_eval_failed', { sessionId, error: result.error, attempts: result.attempts });
+
+  // Manual end + the required evaluator failed → DO NOT end the date. Nothing is
+  // mutated (no ended flag, no stamina/money spent, no jealousy, no buff decay, rapport
+  // preserved); the session stays open so the player can end again once the model is back.
+  if (!result.ok && !forcedEnd) {
+    return {
+      session,
+      evaluated: false,
+      relationship: null,
+      mood: null,
+      expression: null,
+      summaryLine: null,
+      memoriesWritten: 0,
+      evalError: result.error,
+      jealousy: null,
+      milestone: null,
+      breakup: null,
+      onTheRocks: false,
+      reconciled: false,
+      ending: null,
+    };
+  }
+
+  // The date is now truly ending (the eval succeeded, or a narrative exit forces it).
+  // Commit the one-time costs + rolls exactly once — the per-session lock in
+  // endSession() prevents a concurrent double-end.
+  if (endActor.worldId) {
+    stampLastDate(session.characterId, ensureWorldState(endActor.worldId).day);
+    if (pendingCharge) {
+      spendStamina(pendingCharge.worldId);
+      if (pendingCharge.cost > 0) spendMoney(pendingCharge.cost, pendingCharge.pid);
+    }
+  }
+
+  // A monogamous character may "find out" about other people you've seen lately.
+  // Rolled only now that the date is truly ending — never on a manual failed eval.
+  const jealousy = maybeRollJealousy(getCharacter(session.characterId));
+
+  // The session is ending → decay temporary buffs by one session now that the
+  // evaluator (which ran with them still active) is done. Only on a real end, so a
+  // manual failed-eval retry doesn't decay buffs twice.
   decayRelationshipBuffs(session.characterId);
 
   if (!result.ok) {
-    // FAIL SAFE: do not mutate relationship/memories.
-    recordEvent('session_eval_failed', { sessionId, error: result.error, attempts: result.attempts });
+    // Narrative exit whose evaluator failed: end best-effort, WITHOUT eval deltas.
     return endBase(false, result.error, { jealousy });
   }
 
   const evaluation = result.data;
+  // The evaluator is asked for a short mood word, but models sometimes hand back a
+  // whole sentence (or a word with a trailing period). Strip any trailing
+  // sentence-ending punctuation so it slots cleanly into the templates that append
+  // their own — the "Mood: {mood}." banner, the "A date — {mood}" moment, and the
+  // afterglow prompt ("...was {mood}.") — instead of producing a stray double period.
+  evaluation.mood = evaluation.mood.replace(/[\s.!?…]+$/u, '');
   const actor = getCharacter(session.characterId);
   const chronDay = actor.worldId ? ensureWorldState(actor.worldId).day : 0;
   const event = recordEvent('session_eval', {

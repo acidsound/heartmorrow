@@ -10,6 +10,7 @@ import { getRelationship } from './relationship-service';
 import { applyRelationshipChange, applyTempBuff, setRelationshipFlag, stampLastSeen } from './stat-service';
 import { ensureWorldState } from './world-clock-service';
 import { addPlayerMessage, createSession, endSession, maybeRollJealousy, previewCharacterPrompt, previewSessionPrompt } from './conversation-service';
+import { getCharacterAvailability } from './availability-service';
 import { buildTextReplyMessages, messageText } from '../prompt/prompt-builder';
 import { listMemories } from './memory-service';
 import { recordEvent } from './event-service';
@@ -34,6 +35,18 @@ function seq(values: number[]): () => number {
 
 const evalReply = (summaryLine: string) =>
   JSON.stringify({ mood: 'neutral', expression: 'neutral', relationshipDeltas: {}, memoryCandidates: [], summaryLine });
+
+function advanceToAvailableDay(worldId: string, characterId: string): void {
+  const state = ensureWorldState(worldId);
+  for (let offset = 0; offset < 60; offset += 1) {
+    const day = state.day + offset;
+    if (getCharacterAvailability(worldId, day, characterId).available) {
+      if (day !== state.day) worldStatesRepo.update({ ...state, day, updatedAt: Date.now() });
+      return;
+    }
+  }
+  throw new Error(`Could not find an available test day for ${characterId}.`);
+}
 
 beforeEach(() => resetDb());
 afterEach(() => setAdapterOverride(null));
@@ -417,8 +430,8 @@ describe('player constellation edges (composeConstellation)', () => {
   });
 });
 
-describe('temporary buffs decay when a session ends', () => {
-  it('decays once even when the end-of-date evaluator fails', async () => {
+describe('a date only ends once the evaluator runs (or a narrative exit forces it)', () => {
+  it('a manual end whose evaluator fails keeps the date OPEN and mutates nothing', async () => {
     const { character } = seedWorldAndCharacter();
     applyTempBuff(character.id, 'charm', 8, 2, { source: 'test' }); // 2 sessions remaining
     expect(getRelationship(character.id).flags['buff:charm']).toBe(2);
@@ -429,9 +442,50 @@ describe('temporary buffs decay when a session ends', () => {
     setAdapterOverride(new ScriptedAdapter(['this is not json']));
 
     const res = await endSession(session.id);
-    expect(res.evaluated).toBe(false); // eval failed → no relationship/memory mutation
-    // …but the buff still decayed by one session (README: "decay when a session ends").
+    expect(res.evaluated).toBe(false);
+    expect(res.session.ended).toBe(false); // the date stays OPEN so it can be retried
+    // Nothing was finalized: the buff did NOT decay (it decays only on a real end).
+    expect(getRelationship(character.id).flags['buff:charm']).toBe(2);
+  });
+
+  it('a manual end whose evaluator succeeds ends the date and decays the buff once', async () => {
+    const { character } = seedWorldAndCharacter();
+    applyTempBuff(character.id, 'charm', 8, 2, { source: 'test' });
+
+    const session = createSession({ characterId: character.id, mode: 'date', locationId: null });
+    addPlayerMessage(session.id, 'lovely evening');
+    setAdapterOverride(new ScriptedAdapter([evalReply('A good night.')]));
+
+    const res = await endSession(session.id);
+    expect(res.evaluated).toBe(true);
+    expect(res.session.ended).toBe(true);
     expect(getRelationship(character.id).flags['buff:charm']).toBe(1);
+  });
+
+  it('a narrative exit (walkout) still ends the date even when the evaluator fails', async () => {
+    const { character } = seedWorldAndCharacter();
+    applyTempBuff(character.id, 'charm', 8, 2, { source: 'test' });
+
+    const session = createSession({ characterId: character.id, mode: 'date', locationId: null });
+    addPlayerMessage(session.id, 'you know what, forget it');
+    // The character has already stormed out — a walkout-marked line in the transcript.
+    messagesRepo.insert(
+      MessageSchema.parse({
+        id: newId('msg'),
+        sessionId: session.id,
+        role: 'character',
+        text: "Don't contact me again.",
+        metadata: { walkout: true },
+        createdAt: Date.now(),
+      }),
+    );
+    // The evaluator fails — but a walkout can't resume, so the date must still end.
+    setAdapterOverride(new ScriptedAdapter(['this is not json']));
+
+    const res = await endSession(session.id);
+    expect(res.evaluated).toBe(false);
+    expect(res.session.ended).toBe(true); // a narrative exit finalizes regardless
+    expect(getRelationship(character.id).flags['buff:charm']).toBe(1); // decays on the real end
   });
 });
 
@@ -466,6 +520,7 @@ describe('honest about an emergent NPC partnership (no denying a world-announced
     const { world, character } = seedWorldAndCharacter(); // monogamous by default
     const bea = createCharacter({ worldId: world.id, name: 'Bea', age: 27, datingStats: DEFAULT_DATING_STATS });
     coupleUp(world.id, character.id, bea.id);
+    advanceToAvailableDay(world.id, character.id);
 
     const session = createSession({ characterId: character.id, mode: 'date', locationId: null });
     const sys = previewSessionPrompt(session.id).system;

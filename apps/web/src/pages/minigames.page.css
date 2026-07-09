@@ -5,12 +5,15 @@
    Builds on Nocturne v2 tokens + shared .mg-/.meter-/.quiz- classes.
    =========================================================================== */
 
-/* --- "Playing with" selector — a HUD console bar ------------------------- */
+/* --- "Playing with" selector — label above the roster --------------------
+   Stacked (not a side-by-side bar): with enough characters the picker grid
+   wraps to multiple rows, and a left-hand label ends up floating vertically
+   centered beside the block instead of heading it. */
 .mga-console {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
   padding: 12px 16px;
 }
 .mga-console .kicker {
@@ -38,6 +41,20 @@
 }
 @media (min-width: 2400px) {
   .mga-grid { grid-template-columns: repeat(4, 1fr); }
+}
+/* Phones: two slimmer cabinets per row instead of one full-width card. */
+@media (max-width: 540px) {
+  .mga-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .mga-cabinet { padding: 11px; gap: 9px; }
+  .mga-title { font-size: 0.94rem; }
+  .mga-desc {
+    font-size: 0.78rem;
+    line-height: 1.45;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+  }
 }
 
 /* A single game "cabinet" — bold, layered, with a brass marquee top. */

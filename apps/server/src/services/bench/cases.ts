@@ -56,6 +56,7 @@ import {
   BenchCaseMetaSchema,
   type BenchCaseMeta,
   type BenchCaseKind,
+  type BenchCaseTag,
   type BenchBaselineSpec,
   type BenchBaselineValue,
   type BenchCaseSetupInput,
@@ -164,6 +165,9 @@ export interface BenchCaseDef {
   description: string;
   kind: BenchCaseKind;
   group: string;
+  /** Cross-cutting run-preset tags ("Generators" / "Prose"); omit for cases (e.g.
+   *  judges, dialogue, extraction) that belong to neither bucket. */
+  tags?: BenchCaseTag[];
   baselineSpec?: BenchBaselineSpec;
   baselinePrompt?: string;
   /** Built-in default baseline (judge cases) so runs are scored without user input. */
@@ -184,6 +188,13 @@ export interface BenchCaseDef {
 /** True when a value is a present, non-blank string. */
 function nonBlank(v: unknown): boolean {
   return typeof v === 'string' && v.trim().length > 0;
+}
+
+/** True when a value is a present, non-empty array — used to FAIL a generation whose
+ *  schema `.default([])`s a list the task actually required content in (so a lazy model
+ *  that omits the field still parses, but doesn't pass the bench). */
+function nonEmptyArr(v: unknown): boolean {
+  return Array.isArray(v) && v.length > 0;
 }
 
 // --- display helpers --------------------------------------------------------
@@ -948,6 +959,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   // === Texting & phone ===
   {
     id: 'gen_daily_text',
+    tags: ['prose'],
     label: 'Daily check-in text',
     description: 'Mara’s one unprompted daily text. Should fit her voice and the relationship stage; may suggest a gift.',
     kind: 'generation',
@@ -972,6 +984,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   },
   {
     id: 'gen_email_batch',
+    tags: ['prose'],
     label: 'In-world emails',
     description: 'A batch of ambient in-world emails (services, strangers — never love interests) for the player’s inbox.',
     kind: 'generation',
@@ -983,11 +996,15 @@ export const BENCH_CASES: BenchCaseDef[] = [
       schemaName: 'EmailBatch',
       task: 'Write 1–2 in-world emails.',
     }),
+    // The task asks for 1–2 emails; `emails` `.default([])`s, so producing none still
+    // parses. An empty batch means it did nothing it was asked to — fail it.
+    validate: (data) => (nonEmptyArr((data as { emails?: unknown }).emails) ? null : 'No emails — the model was asked for 1–2 and produced none.'),
   },
 
   // === World & continuity ===
   {
     id: 'gen_day_recap',
+    tags: ['prose'],
     label: 'End-of-day recap',
     description: 'Narrate a day’s real events into a short recap. Must stay grounded in the facts it’s given.',
     kind: 'generation',
@@ -1006,6 +1023,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   },
   {
     id: 'gen_world_sim',
+    tags: ['prose'],
     label: 'World-sim color pass',
     description: 'Reword the day’s pre-decided town happenings, keyed by ref — never inventing people or events.',
     kind: 'generation',
@@ -1022,9 +1040,13 @@ export const BENCH_CASES: BenchCaseDef[] = [
       task: 'Reword each happening, keyed by ref.',
       maxTokens: 1200,
     }),
+    // Given 3 refs to reword; `lines` `.default([])`s, so a model that rewrote nothing
+    // still parses. An empty pass means it did the job for none of them — fail it.
+    validate: (data) => (nonEmptyArr((data as { lines?: unknown }).lines) ? null : 'No lines — the model rewrote none of the happenings it was handed.'),
   },
   {
     id: 'gen_summary',
+    tags: ['prose'],
     label: 'Conversation summary',
     description: 'Compress a date transcript into a compact rolling summary that bounds prompt growth.',
     kind: 'generation',
@@ -1039,6 +1061,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   },
   {
     id: 'gen_chronicle',
+    tags: ['prose'],
     label: 'Chronicle fold',
     description: 'Fold new date highlights into the cross-date chronicle — the long narrative memory of the relationship.',
     kind: 'generation',
@@ -1062,6 +1085,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   },
   {
     id: 'gen_epilogue',
+    tags: ['prose'],
     label: 'Happy-ending epilogue',
     description: 'Synthesize a forward-looking happy-ending epilogue from the relationship’s history.',
     kind: 'generation',
@@ -1100,6 +1124,10 @@ export const BENCH_CASES: BenchCaseDef[] = [
       schemaName: 'ExFactExtraction',
       task: 'Extract a concrete ex-fact with a verbatim quote.',
     }),
+    // The prompt allows "no facts" only when none are stated — but THIS fixture states
+    // clear ex-facts (a clock-restoring ex who kept odd 4am hours). An empty extraction
+    // means the model missed obvious, quotable material — fail it.
+    validate: (data) => (nonEmptyArr((data as { facts?: unknown }).facts) ? null : 'No facts — the fixture states clear ex-facts (a clock-restoring ex, odd hours) the model failed to extract.'),
   },
   {
     id: 'gen_player_fact',
@@ -1114,11 +1142,16 @@ export const BENCH_CASES: BenchCaseDef[] = [
       schemaName: 'PlayerFactExtraction',
       task: 'Extract concrete player self-facts with verbatim quotes.',
     }),
+    // This fixture states clear self-facts (freelance illustrator, grew up inland, wants
+    // to illustrate a book of sea myths). An empty extraction misses obvious, quotable
+    // material — fail it.
+    validate: (data) => (nonEmptyArr((data as { facts?: unknown }).facts) ? null : 'No facts — the fixture states clear self-facts (freelance illustrator, grew up inland) the model failed to extract.'),
   },
 
   // === Creator generation ===
   {
     id: 'gen_world',
+    tags: ['generator'],
     label: 'World generation',
     description: 'Design a whole, fleshed-out world (setting + locations + notes) from a one-line seed. The heaviest generation.',
     kind: 'generation',
@@ -1131,9 +1164,20 @@ export const BENCH_CASES: BenchCaseDef[] = [
       task: 'Generate a complete world.',
       maxTokens: 3500,
     }),
+    // The guardrails require LORE and GLOBAL NOTES on every world (RULES may legitimately
+    // be empty for an ordinary modern setting, so it's NOT gated). Both default to '' in
+    // the schema, so a model that skips them still parses — fail those: a "fleshed-out
+    // world" with no backstory or narrator briefing isn't complete.
+    validate: (data) => {
+      const d = (data ?? {}) as { lore?: unknown; globalNotes?: unknown };
+      if (!nonBlank(d.lore)) return 'Empty lore — a fleshed-out world needs its backstory; LORE came back blank.';
+      if (!nonBlank(d.globalNotes)) return 'Empty global notes — the always-on narrator briefing came back blank.';
+      return null;
+    },
   },
   {
     id: 'gen_location',
+    tags: ['generator'],
     label: 'Location generation',
     description: 'Invent distinct new venues that fit the world (no duplicates of existing ones).',
     kind: 'generation',
@@ -1154,6 +1198,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   },
   {
     id: 'gen_shop',
+    tags: ['generator'],
     label: 'Shop-item generation',
     description: 'Generate a batch of in-world giftable items that fit the setting; the server clamps their effects.',
     kind: 'generation',
@@ -1169,6 +1214,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   },
   {
     id: 'gen_property',
+    tags: ['generator'],
     label: 'Property generation',
     description: 'Generate ownable/leasable properties with coherent economics (the server enforces a payback floor).',
     kind: 'generation',
@@ -1184,6 +1230,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   },
   {
     id: 'gen_company',
+    tags: ['generator'],
     label: 'Company / stock generation',
     description: 'Generate fictional companies for the stock market that fit the world’s economy.',
     kind: 'generation',
@@ -1199,6 +1246,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   },
   {
     id: 'gen_market_news',
+    tags: ['prose'],
     label: 'Market news color',
     description: 'Narrate the day’s biggest stock movers, keyed by ticker ref — never inventing companies or prices.',
     kind: 'generation',
@@ -1211,9 +1259,13 @@ export const BENCH_CASES: BenchCaseDef[] = [
       task: 'Narrate the day’s movers.',
       maxTokens: 1000,
     }),
+    // Given 2 movers to narrate; `items` `.default([])`s, so narrating nothing still
+    // parses. An empty result is a failure — there was clear material to color.
+    validate: (data) => (nonEmptyArr((data as { items?: unknown }).items) ? null : 'No items — the model narrated none of the movers it was handed.'),
   },
   {
     id: 'gen_quiz',
+    tags: ['generator'],
     label: 'Lore-quiz generation',
     description: 'Generate multiple-choice quiz questions grounded only in the world + the date (the Lore Quiz minigame).',
     kind: 'generation',
@@ -1229,6 +1281,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   },
   {
     id: 'gen_writer',
+    tags: ['prose'],
     label: 'Newspaper dispatch',
     description: 'Write a short in-world newspaper dispatch to transcribe (the Copy Desk job). Plain prose, grounded in lore.',
     kind: 'generation',
@@ -1244,6 +1297,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   },
   {
     id: 'gen_profile',
+    tags: ['generator'],
     label: 'Character profile generation',
     description: 'Flesh out a character’s narrative profile fields (appearance, love language, quirks…) from a short brief.',
     kind: 'generation',
@@ -1256,9 +1310,26 @@ export const BENCH_CASES: BenchCaseDef[] = [
       task: 'Flesh out a character profile.',
       maxTokens: 3000,
     }),
+    // The guardrails ask the model to fill EVERY profile field; the schema `.default`s
+    // each to empty, so a model that skips one (e.g. an empty `physicalDesires` for a
+    // stoic character) still parses. The whole point of the profile filler is a COMPLETE
+    // profile — so any requested field coming back empty fails the case.
+    validate: (data) => {
+      const d = (data ?? {}) as Record<string, unknown>;
+      const strFields = ['appearance', 'textingStyle', 'onlinePersona', 'loveLanguage'] as const;
+      for (const f of strFields) {
+        if (!nonBlank(d[f])) return `Empty ${f} — the profile filler left a field the guardrails require blank.`;
+      }
+      const listFields = ['physicalNeeds', 'physicalDesires', 'physicalDislikes', 'insecurities', 'quirks'] as const;
+      for (const f of listFields) {
+        if (!nonEmptyArr(d[f])) return `Empty ${f} — the profile filler returned no items for a field the guardrails require.`;
+      }
+      return null;
+    },
   },
   {
     id: 'gen_character',
+    tags: ['generator'],
     label: 'Character generation (from text)',
     description: 'Build a WHOLE character draft from pasted/uploaded reference text (a SillyTavern-style card), fitted to the world — how well the model turns messy source material into a complete, coherent character.',
     kind: 'generation',
@@ -1284,6 +1355,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   },
   {
     id: 'gen_room',
+    tags: ['prose'],
     label: 'Private-room description',
     description: 'Describe a character’s home as a cozy, characterful date venue, grounded in who they are.',
     kind: 'generation',
@@ -1301,6 +1373,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   // === Social feed ===
   {
     id: 'gen_feed_post',
+    tags: ['prose'],
     label: 'Faces post',
     description: 'An NPC writes an ambient social-feed post in their own voice, driven by their posting style.',
     kind: 'generation',
@@ -1322,6 +1395,7 @@ export const BENCH_CASES: BenchCaseDef[] = [
   },
   {
     id: 'gen_feed_comment',
+    tags: ['prose'],
     label: 'Faces comment',
     description: 'An NPC comments on the player’s post, colored by their relationship and shared memories.',
     kind: 'generation',
@@ -1364,6 +1438,7 @@ function buildMeta(def: BenchCaseDef): BenchCaseMeta {
     description: def.description,
     kind: def.kind,
     group: def.group,
+    tags: def.tags ?? [],
     baselineSpec: def.baselineSpec ?? null,
     baselinePrompt: def.baselinePrompt ?? '',
     defaultBaseline: def.defaultBaseline ?? null,

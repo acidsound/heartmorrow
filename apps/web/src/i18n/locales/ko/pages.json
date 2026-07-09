@@ -6,9 +6,12 @@
     "settlingIn": "안정되는 중",
     "retry": "재시도",
     "retrying": "재시도 중…",
+    "regen": "답장 다시 생성",
+    "regenTitle": "이 답장 다시 쓰기 (데이트 평가에는 영향 없음)",
     "sendFailed": "메시지를 보내지 못했습니다.",
     "replyFailed": "상대방이 답장하지 않았습니다. 오류가 발생했습니다.",
     "replyDropped": "답장이 전달되지 않았습니다.",
+    "evalFailed": "데이트를 평가하지 못했습니다. 모델을 사용할 수 없는 상태일 수 있습니다. 데이트는 아직 열려 있으니 다시 종료해 보세요.",
     "tonightsPlan": "오늘 밤 계획",
     "onADateTitle": "데이트 중입니다",
     "onADateBody": "{name} 님과의 데이트가 아직 진행 중입니다. 진행 상황은 안전하게 저장됩니다.",
@@ -47,10 +50,10 @@
     "outOfEnergy": "오늘 사용할 에너지를 모두 소모했습니다. 메뉴에서 하루를 종료해 휴식을 취한 뒤 내일 다시 오세요.",
     "settingScene": "장면을 설정하는 중…",
     "begin": "시작하기",
-    "evalTitle": "데이트 평가 완료",
-    "evalDetail": "분위기: {mood}. {summary} ({count, plural, one {기억 #개 저장됨} other {기억 #개 저장됨}})",
+    "recapKicker": "오늘 저녁의 기록",
+    "recapMemories": "{count, plural, =0 {새로 남은 기억 없음} one {기억 #개 남음} other {기억 #개 남음}}",
     "evalFailedTitle": "평가를 완료하지 못했습니다",
-    "evalFailedBody": " — 변경된 능력치가 없습니다. {error}",
+    "recapFailedBody": "변경된 능력치가 없으며 아무 것도 기록되지 않았습니다. {error}",
     "endingKicker": "해피 엔딩",
     "endingTitle": "\"{title}\"",
     "endingNote": "영원히 남을 무언가를 만들어냈습니다. 휴대폰의 엔딩 메뉴에서 언제든 다시 읽어보세요. 게임은 계속됩니다.",
@@ -76,6 +79,7 @@
     "dtrBackfireTitle": "바랐던 대로 흘러가지 않았습니다.",
     "dtrEnded": "데이트가 종료되었습니다.",
     "dtrNotYet": "아직입니다. 시간을 조금 더 가져보세요.",
+    "dtrNotYetKicker": "아직은 아니에요",
     "yourCompanion": "당신의 동반자",
     "brokenUp": "결별함",
     "onTheRocks": "관계가 위태로움",
@@ -253,6 +257,7 @@
     "memoriesCollapsed": "{count, plural, one {#개의 추억 간직 중 — <0>보기</0>를 눌러 확인하세요.} other {#개의 추억 간직 중 — <0>보기</0>를 눌러 확인하세요.}}",
     "importanceTitle": "중요도 {n}/5",
     "importanceAria": "중요도 5점 만점에 {n}점",
+    "weight": "가중치",
     "fromDate": "데이트를 통해",
     "addedManually": "수동으로 추가됨",
     "deleteMemory": "추억 삭제",
@@ -344,6 +349,8 @@
     "purse": "지갑",
     "generateItems": "아이템 생성",
     "purchased": "{name} 구매 완료!",
+    "resultAcquired": "획득",
+    "resultStocked": "입고된 아이템",
     "genFailed": "아이템 생성 실패: {error}",
     "saved": "{count, plural, one {상점에 아이템 #개를 저장했습니다.} other {상점에 아이템 #개를 저장했습니다.}}",
     "workshop": "크리에이터 작업실",
@@ -401,7 +408,8 @@
     "using": "사용 중…",
     "use": "사용",
     "giveHint": "데이트 중 혹은 메시지로 선물하세요",
-    "used": "{name}님을 사용했습니다."
+    "used": "{name}님을 사용했습니다.",
+    "resultUsed": "사용 완료"
   },
   "dashboard": {
     "eyebrow": "등불 아래 기록된 마음의 연감",
@@ -412,6 +420,12 @@
       "afternoon": "좋은 오후입니다",
       "evening": "좋은 저녁입니다",
       "night": "아직 깨어 계시네요"
+    },
+    "greetingMark": {
+      "morning": ".",
+      "afternoon": ".",
+      "evening": ".",
+      "night": "?"
     },
     "line": {
       "morning": "새로운 하루가 시작되었습니다. 누구와 함께 보내시겠어요?",
@@ -619,8 +633,16 @@
     "totalTokens": "총 토큰",
     "totalTime": "총 소요 시간",
     "avgTokSec": "평균 tok/sec",
+    "avgTokSecTitle": "케이스별 토큰 수로 가중한 생성 속도입니다. 엔드포인트가 응답별 통계를 보고하면 정확합니다(예: 기본 URL이 /api/v0로 끝나는 LM Studio 전용 API). 그렇지 않은 ≈ 값은 프롬프트 처리와 전송 시간까지 포함한 전체 요청 추정치이므로 실제 속도를 낮게 나타냅니다. 정확한 값을 원하면 설정에서 사용 가능한 최적의 API를 지정하세요.",
+    "speedMeasuredTitle": "엔드포인트가 보고한 실제 디코딩 속도입니다(예: LM Studio 전용 API). 프롬프트 처리를 제외하고 생성 시간만으로 측정합니다.",
+    "speedEstimatedTitle": "≈ 추정치: 토큰 수를 전체 요청 시간으로 나눈 값입니다. 프롬프트 처리와 네트워크 시간이 포함되어 실제 생성 속도를 낮게 나타냅니다. 정확한 디코딩 속도를 원하면 응답별 통계를 보고하는 엔드포인트를 설정에서 지정하세요.",
+    "speedFoot": "≈ 속도는 프롬프트 처리와 전송 시간을 포함한 전체 요청 추정치이므로 실제 생성 속도를 낮게 나타냅니다. 실제 디코딩 속도를 보려면 벤치마크를 생성 통계를 보고하는 엔드포인트에 연결하세요. 예: LM Studio 전용 API(설정 → /api/v0로 끝나는 기본 URL).",
     "judgeAgreement": "심사위원 일치도",
     "nJudged": "{count}건 심사됨",
+    "fellBack": "대체 모드 사용",
+    "fellBackTitle": "요청한 구조화 출력 모드를 사용하지 못해 더 유연한 모드로 대체한 케이스 수입니다(json_schema → json_object → prompt_only). 실패가 아니라 기능 지원 여부를 나타내며, 케이스는 계속 실행됩니다.",
+    "fallbackBadgeTitle": "엔드포인트가 요청한 형식을 거부해 이 케이스는 더 유연한 구조화 출력 모드로 대체했습니다. 실패가 아니며, 출력은 정상적으로 생성되고 검증되었습니다.",
+    "nFellBack": "{count}건 대체 모드 사용",
     "perCase": "케이스당",
     "chTokens": "토큰 (입력 / 출력)",
     "chLatency": "지연 시간",
@@ -660,6 +682,8 @@
     "select": "선택",
     "selAll": "전체",
     "selJudges": "심사위원",
+    "selGenerators": "생성기",
+    "selProse": "서술",
     "selQuick": "빠르게",
     "selNone": "없음",
     "dialogueTurns": "대화 턴 수: {n}",
@@ -734,6 +758,8 @@
     "export": "내보내기…",
     "exportDirtyHint": "먼저 변경 사항을 저장하세요. 내보내기는 저장된 세계를 기준으로 수행되므로 저장되지 않은 수정 사항은 포함되지 않습니다.",
     "worldSaved": "세계가 저장되었습니다!",
+    "savedKicker": "저장 완료",
+    "genKicker": "생성 완료",
     "noun": "세계",
     "untitledWorld": "제목 없는 세계",
     "worldsHeader": "세계 목록",
@@ -843,7 +869,7 @@
     "secPortrait": "초상화",
     "generate": "생성",
     "portraitGenNote": "'생성' 기능을 사용하여 초상화, 붙여넣은 텍스트, 업로드한 텍스트 또는 이 모두를 기반으로 캐릭터 초안을 작성하세요. 저장 전 검토할 수 있도록 모든 탭이 자동으로 채워집니다.",
-    "genKicker": "캐릭터 작업대",
+    "genKicker": "생성 완료",
     "genTitle": "캐릭터 생성",
     "genIntro": "초상화, 참조 텍스트 또는 두 가지 모두를 사용하여 완전한 캐릭터 초안을 작성하세요. 그 후 저장하기 전에 모든 탭을 검토하고 수정하십시오. 최소 하나 이상의 소스를 제공해야 합니다.",
     "genPortrait": "초상화 (선택 사항)",
@@ -936,6 +962,7 @@
     "profileGenerated": "프로필이 생성되었습니다. 검토 후 저장하세요.",
     "profileGenFailed": "프로필 생성 실패: {error}",
     "characterGenerated": "캐릭터가 생성되었습니다. 모든 탭을 검토 후 저장하세요.",
+    "savedKicker": "저장 완료",
     "characterGenFailed": "생성 실패: {error}",
     "untitledCharacter": "제목 없는 캐릭터"
   },
@@ -1037,6 +1064,16 @@
         "tag": "native /api/v0",
         "desc": "LM Studio 전용 API — 더 상세한 모델 목록(로드 상태, 컨텍스트, 양자화)과 응답별 속도 통계를 제공합니다. 기본 URL을 …/api/v0로 설정하세요."
       },
+      "ollama": {
+        "name": "Ollama",
+        "tag": "native /api/chat",
+        "desc": "Ollama 전용 API — 모델의 추론을 켜거나 끄고, 추론 수준을 지정할 수 있습니다. 로드 상태와 양자화 정보가 포함된 모델 목록도 제공합니다. 기본 URL은 서버 루트(예: http://localhost:11434)로 지정하세요."
+      },
+      "koboldcpp": {
+        "name": "KoboldCpp",
+        "tag": "native /api/v1",
+        "desc": "KoboldCpp 전용 API — 텍스트 완성 엔드포인트이므로 로드한 모델에 맞는 명령어 템플릿을 선택하세요. 기본 URL은 서버 루트(예: http://localhost:5001)로 지정하세요."
+      },
       "anthropic": {
         "name": "Anthropic",
         "tag": "messages",
@@ -1105,6 +1142,8 @@
       "baseUrlHintAnthropic": "예: https://api.anthropic.com/v1 (또는 호환되는 프록시)",
       "baseUrlHintLmstudio": "예: http://localhost:1234/api/v0 (LM Studio 네이티브 API)",
       "baseUrlHintDefault": "예: http://localhost:1234/v1 또는 http://localhost:1234/",
+      "baseUrlHintOllama": "예: http://localhost:11434 (Ollama 서버 루트, /v1 경로 아님)",
+      "baseUrlHintKobold": "예: http://localhost:5001 (KoboldCpp 서버 루트, /v1 경로 아님)",
       "apiKey": "API 키",
       "apiKeyHintSet": "키가 설정되어 있습니다. 유지하려면 빈칸으로 두세요.",
       "apiKeyHintAnthropic": "Anthropic API 사용 시 필수입니다.",
@@ -1120,6 +1159,27 @@
       "pickModel": "모델 선택…",
       "loading": "불러오는 중…",
       "loadModels": "모델 불러오기",
+      "ollamaThink": "추론",
+      "ollamaThinkHint": "Ollama의 추론 제어 옵션입니다. '모델 기본값'은 옵션을 전송하지 않으며, 추론 모드가 없어 이 옵션을 거부하는 모델에 안전한 선택입니다. 켜기/끄기는 강제 지정하고, 낮음~최대는 추론 수준을 지원하는 모델(예: gpt-oss)의 추론 깊이를 설정합니다. 추론 과정은 답장에 표시되지 않습니다.",
+      "ollamaThinkOpts": {
+        "default": "모델 기본값",
+        "off": "끄기",
+        "on": "켜기",
+        "low": "낮음",
+        "medium": "보통",
+        "high": "높음",
+        "max": "최대"
+      },
+      "koboldTemplate": "명령어 템플릿",
+      "koboldTemplateHint": "KoboldCpp 전용 API는 원시 텍스트 완성 엔드포인트이므로 Heartmorrow가 각 턴을 형식에 맞게 구성합니다. 로드한 모델의 훈련 형식과 맞는 템플릿을 선택하세요. 잘못된 템플릿도 작동은 하지만 답변 품질이 떨어집니다. 일반적으로는 Alpaca가 안전하며, 해당 계열에는 ChatML, Llama 3, Mistral, Vicuna를, 베이스 모델에는 일반 텍스트를 사용하세요.",
+      "koboldTemplateOpts": {
+        "alpaca": "Alpaca (### Instruction)",
+        "chatml": "ChatML (<|im_start|>)",
+        "llama3": "Llama 3",
+        "vicuna": "Vicuna (USER/ASSISTANT)",
+        "mistral": "Mistral ([INST])",
+        "plain": "일반 텍스트 (구분 기호 없음)"
+      },
       "temperature": "온도: {value}",
       "maxTokens": "최대 토큰",
       "advancedSampling": "고급 샘플링",
@@ -1238,6 +1298,13 @@
       "topics": "주제"
     },
     "topicOf": "주제 {n} / {total}",
+    "support": {
+      "kicker": "커뮤니티",
+      "title": "지원 및 업데이트",
+      "blurb": "질문, 버그 제보, 아이디어가 있거나 개발 소식을 따라가고 싶으신가요? Discord에 참여해 도움을 받고, 공지와 커뮤니티 소식을 확인하세요. GitHub에서 소스 코드, 릴리스, 공개 이슈를 둘러볼 수도 있습니다.",
+      "cta": "Discord 참여",
+      "ctaGithub": "GitHub에서 보기"
+    },
     "cats": {
       "getting-started": {
         "label": "시작하기",
@@ -1254,6 +1321,8 @@
             "bullets": [
               "OpenAI 호환: LM Studio, Ollama, llama.cpp, vLLM 및 유사한 로컬 서버와 호환됩니다. 기본 URL을 자신의 서버로 지정하세요.",
               "LM Studio: 전용 연결 방식을 제공하며, 더 상세한 모델 정보와 응답당 속도 통계를 확인할 수 있습니다.",
+              "Ollama: 전용 연결 방식에서 추론 제어를 제공합니다. 모델의 추론을 켜거나 끄고, 수준을 지원하는 모델은 깊이(낮음~최대)도 설정할 수 있습니다.",
+              "KoboldCpp: 전용 연결 방식을 제공합니다. 원시 텍스트 엔진이므로 로드한 모델에 맞는 명령어 템플릿(Alpaca, ChatML, Llama 3 등)을 선택하세요.",
               "Anthropic: API 키가 필요한 호스팅 서비스입니다.",
               "로컬 모델은 보통 키가 필요 없지만, 호스팅 서비스는 필요합니다.",
               "캐릭터 초상화 생성을 위한 별도의 옵션이 있지만, 이는 선택 사항이며 플레이에 필수적이지는 않습니다."
@@ -1319,7 +1388,8 @@
             "heading": "실시간 대화",
             "body": [
               "데이트는 주고받는 대화입니다. 입력창에 원하는 말을 적어 보내면 캐릭터가 실시간으로 답장합니다. 캐릭터가 생각하는 동안에는 입력 중 표시가 나타나고, 기분에 따라 초상화의 표정도 바뀍니다. 정해진 선택지는 없습니다. 자신의 말로 자유롭게 대화하세요.",
-              "입력창 위에는 대화의 의도를 설정할 수 있는 선택형 칩이 있습니다. '플러팅', '놀리기', '마음 열기'는 항상 표시되며, 갈등을 풀어야 할 때는 '안심시키기'와 '사과하기'가 나타납니다. 이 칩들은 필수 사항이 아니며 그 자체로 관계를 변화시키지는 않습니다. 다만 메시지가 어떤 의도로 전달될지를 캐릭터에게 알려주는 역할을 하며, 상황에 맞는 적절한 의도를 선택했을 때 더 좋은 반응을 얻을 수 있습니다."
+              "입력창 위에는 대화의 의도를 설정할 수 있는 선택형 칩이 있습니다. '플러팅', '놀리기', '마음 열기'는 항상 표시되며, 갈등을 풀어야 할 때는 '안심시키기'와 '사과하기'가 나타납니다. 이 칩들은 필수 사항이 아니며 그 자체로 관계를 변화시키지는 않습니다. 다만 메시지가 어떤 의도로 전달될지를 캐릭터에게 알려주는 역할을 하며, 상황에 맞는 적절한 의도를 선택했을 때 더 좋은 반응을 얻을 수 있습니다.",
+              "답장이 깨지거나 반복되어 나오면 캐릭터의 가장 최근 답장에 마우스를 올리고 작은 새로고침 버튼을 눌러 다시 생성하세요. 이 기능은 해당 답장의 표현만 다시 쓰며, 메시지 평가나 데이트 진행 상태는 바꾸지 않습니다. (문자에서도 캐릭터의 마지막 메시지 아래에 같은 버튼이 있습니다.)"
             ]
           },
           {

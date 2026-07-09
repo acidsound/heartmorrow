@@ -7,6 +7,7 @@ import {
   isBrokenUp,
   isOnTheRocks,
   nextDtrRung,
+  DTR_COOLDOWN_DAYS,
   warmthBand,
   bandIndex,
   deriveCalendar,
@@ -15,6 +16,8 @@ import {
   venueTierMeta,
   availableIntents,
   isGiftableItem,
+  startingRapport,
+  RAPPORT_LEAVE_FLOOR,
   INTENT_ICONS,
   type Intent,
   type InventoryItem,
@@ -32,52 +35,78 @@ import {
   type PropertyView,
   type ActiveDate,
 } from '@dsim/shared';
-import { api, streamChat, streamRetry, assetUrl } from '../lib/api';
+import { api, streamChat, streamRetry, streamRegenerate, assetUrl } from '../lib/api';
 import { errorMessage } from '../lib/hooks';
 import { useAppData } from '../state/app-context';
 import { intentLabel, phaseLabel, relationshipStatusLabel, seasonLabel, weekdayLabel } from '../i18n/labels';
 import { Portrait } from '../components/Portrait';
 import { Icon } from '../components/Icon';
 import { RelationshipBars } from '../components/StatBars';
+import { RichLine } from '../components/RichText';
 import { Banner, Empty, Field, Spinner } from '../components/ui';
 import './date.page.css';
 
 /**
- * The live date "trajectory" — a center-anchored diverging bar. Neutral sits in
- * the middle; a glowing fill grows RIGHT (rose→brass) as the date warms, or LEFT
- * (ember) as it sours, with a per-turn +N / −N flourish. Numbers are never shown;
- * only the fill and a qualitative caption. The 0..100 value is internal.
+ * The live date "trajectory" — a diverging bar whose center seam is where THIS date
+ * began (`anchor`; a guarded character opens BELOW the neutral midpoint). The fill
+ * grows RIGHT (rose→brass) as rapport climbs from the seam toward 100, or LEFT (ember)
+ * as it sinks toward the leave floor. Each half is scaled to that side's REAL room, so
+ * the bar reaches hard-left exactly as the date bottoms out (the character is about to
+ * walk) — never while there's still life in it — and hard-right only at a perfect night.
+ * A per-turn +N / −N flourish rides on top; anchoring at the start keeps the fill in step
+ * with it, so an opening +3 always reads as rightward progress even for a guarded
+ * character. Numbers are never shown; only the fill and a qualitative caption. Values 0..100.
  */
 function DateTrajectory({
   value,
+  anchor,
   label,
   pulse,
 }: {
-  value: number;
+  value: number | null;
+  anchor: number;
   label: string;
   pulse: { delta: number; key: number } | null;
 }) {
   const { t } = useTranslation(['pages', 'common']);
-  const tone = value >= 60 ? 'good' : value < 40 ? 'bad' : 'mid';
-  const mag = Math.max(0, Math.min(50, Math.abs(value - 50))); // 0..50 → 0..50% of the track
-  const side = value >= 50 ? 'warm' : 'cool';
+  const v = value ?? anchor; // no read yet → sit exactly on the opening seam (empty fill)
+  // The label word still reads absolute warmth, so its color stays keyed to the raw value.
+  const tone = v >= 60 ? 'good' : v < 40 ? 'bad' : 'mid';
+  const warming = v >= anchor;
+  // Fill each half over its own available range so it can't underfill: warming spans
+  // seam→100, cooling spans seam→leave-floor (below which the character leaves anyway).
+  const room = warming ? Math.max(1, 100 - anchor) : Math.max(1, anchor - RAPPORT_LEAVE_FLOOR);
+  const mag = Math.max(0, Math.min(50, (Math.abs(v - anchor) / room) * 50));
+  const side = warming ? 'warm' : 'cool';
+  // Anchor the fill from the LEFT for both directions (warming grows right of the 50%
+  // seam; cooling occupies the mag% just left of it) and transition `left` too — so as
+  // rapport crosses the seam the fill sweeps continuously THROUGH it instead of the one
+  // element snapping its anchor from right-of-seam to left-of-seam mid-transition (the
+  // old left:50% ↔ right:50% class flip, which made the bar visibly jump across zero).
+  const fillLeft = warming ? 50 : 50 - mag;
   return (
     <div className={`date-trajectory tone-${tone}`} role="img" aria-label={t('chat.trajectoryAria', { label })}>
-      {pulse && pulse.delta !== 0 && (
-        <div className="dt-pulse-wrap" key={pulse.key} aria-hidden="true">
-          <span className={`dt-pulse ${pulse.delta > 0 ? 'up' : 'down'}`}>
-            {pulse.delta > 0 ? '+' : ''}
-            {pulse.delta}
-          </span>
+      <div className="dt-caption">
+        <span className="dt-vibe">{label}</span>
+      </div>
+      <div className="dt-gauge">
+        {pulse && pulse.delta !== 0 && (
+          <div className="dt-pulse-wrap" key={pulse.key} aria-hidden="true">
+            <span className={`dt-pulse ${pulse.delta > 0 ? 'up' : 'down'}`}>
+              {pulse.delta > 0 ? '+' : ''}
+              {pulse.delta}
+            </span>
+          </div>
+        )}
+        <span className="dt-pole dt-pole-cool" aria-hidden="true">◆</span>
+        <div className="dt-track">
+          <span className="dt-center" aria-hidden="true" />
+          <span className={`dt-fill ${side}`} style={{ left: `${fillLeft}%`, width: `${mag}%` }} />
         </div>
-      )}
-      <div className="dt-track">
-        <span className="dt-center" aria-hidden="true" />
-        <span className={`dt-fill ${side}`} style={{ width: `${mag}%` }} />
+        <span className="dt-pole dt-pole-warm" aria-hidden="true">◆</span>
       </div>
       <div className="dt-foot">
         <span className="dt-end">{t('chat.cooling')}</span>
-        <span className="dt-now">{label}</span>
         <span className="dt-end">{t('chat.warming')}</span>
       </div>
     </div>
@@ -337,7 +366,16 @@ export function Chat() {
     setIntent(null);
     setFailed(null);
     try {
-      const [c, sm] = await Promise.all([api.getCharacter(ad.characterId), api.getConversation(ad.sessionId)]);
+      // Pull the character, transcript, and FRESH date state together. The `ad`
+      // snapshot handed to us can be stale — the context's activeDate is only
+      // refetched when a date starts/ends (and on world change), so mid-date its
+      // rapport/vibe/mood still read the start-of-date null; trusting it would empty
+      // the bar and drop the mood on a leave-and-return. Fetch server truth here.
+      const [c, sm, fresh] = await Promise.all([
+        api.getCharacter(ad.characterId),
+        api.getConversation(ad.sessionId),
+        refreshActiveDate(),
+      ]);
       // The context can briefly point at a session that just ended elsewhere — never
       // reopen a finished date. Reconcile (await, so the lock clears) and fall back
       // to setup; the resumeFailed flag is a harmless no-op once activeDate is null.
@@ -355,9 +393,12 @@ export function Chat() {
       const lastMsg = sm.messages[sm.messages.length - 1];
       if (lastMsg && lastMsg.role === 'player') setFailed({ kind: 'reply' });
       setRelationship(await api.getRelationship(c.id));
-      setExpression(null);
-      setVibe(ad.vibe);
-      setRapport(ad.rapport);
+      // Restore the live trajectory + mood from the fresh read fetched above (matched
+      // by session id), falling back to the `ad` snapshot only if it drifted.
+      const live = fresh && fresh.sessionId === ad.sessionId ? fresh : ad;
+      setExpression(live.expression);
+      setVibe(live.vibe);
+      setRapport(live.rapport);
       if (c.worldId) {
         const [ws, ww] = await Promise.all([api.getWorldState(c.worldId), api.worldWeather(c.worldId)]);
         const m = ww.characters.find((x) => x.id === c.id);
@@ -478,6 +519,10 @@ export function Chat() {
     setError(undefined);
     setNotice(undefined);
     setFailed(null);
+    // A new turn supersedes a transient DTR read: clear a lingering "not yet" (deflect)
+    // banner so it can't stay pinned all date or shadow the end-of-date evaluation. An
+    // accepted DTR is a milestone we keep as the primary outcome.
+    if (dtrOutcome && dtrOutcome.decision !== 'accept') setDtrOutcome(null);
     setStreaming({ active: true, text: '' });
     const controller = new AbortController();
     abortRef.current = controller;
@@ -624,6 +669,56 @@ export function Chat() {
     let settled = false;
     try {
       await streamRetry(
+        session.id,
+        {
+          onDelta: (delta) => setStreaming((s) => ({ active: true, text: s.text + delta })),
+          onDone: (m) => {
+            settled = true;
+            setMessages((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
+            setStreaming({ active: false, text: '' });
+          },
+          onError: (msg) => {
+            settled = true;
+            setError(msg);
+            setStreaming({ active: false, text: '' });
+            setFailed({ kind: 'reply' });
+          },
+          onNotice: (msg) => setNotice(msg),
+        },
+        controller.signal,
+      );
+      if (!settled && !controller.signal.aborted) {
+        setStreaming({ active: false, text: '' });
+        setError(t('chat.replyDropped'));
+        setFailed({ kind: 'reply' });
+      }
+    } catch (e) {
+      if (!controller.signal.aborted) {
+        setError(errorMessage(e));
+        setFailed({ kind: 'reply' });
+      }
+      setStreaming({ active: false, text: '' });
+    }
+  };
+
+  // Rewrite the character's MOST RECENT reply (a bad/looping line) without re-judging
+  // the turn. Optimistically drop the old reply — the server deletes it and streams a
+  // fresh one against the same player turn. On failure the reply is gone server-side,
+  // so we surface the standard reply-retry (which also regenerates, never re-judges).
+  const regenerate = async () => {
+    if (!session || streaming.active || busy || locked) return;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'character') return;
+    setError(undefined);
+    setNotice(undefined);
+    setFailed(null);
+    setMessages((prev) => prev.slice(0, -1));
+    setStreaming({ active: true, text: '' });
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let settled = false;
+    try {
+      await streamRegenerate(
         session.id,
         {
           onDelta: (delta) => setStreaming((s) => ({ active: true, text: s.text + delta })),
@@ -808,6 +903,14 @@ export function Chat() {
     try {
       const result = await api.endSession(sid);
       if (sessionIdRef.current !== sid) return; // player abandoned this date mid-eval
+      // The evaluator is required to conclude a manual end. If it failed, the server
+      // keeps the date OPEN (session.ended stays false, evaluated=false) — surface a
+      // retryable error and do NOT conclude/lock the date, so the player can try again
+      // once the model is back. (A walkout/farewell still ends: session.ended is true.)
+      if (!result.session.ended && !result.evaluated) {
+        setError(result.evalError || t('chat.evalFailed'));
+        return;
+      }
       setEvalResult(result);
       setSession(result.session);
       if (result.relationship) {
@@ -1103,10 +1206,35 @@ export function Chat() {
   const status = relationship ? currentStatus(relationship) : 'none';
   const rung = relationship ? nextDtrRung(relationship) : null;
   const spokeThisSession = messages.some((m) => m.role === 'player');
-  const dtrReady = !!rung && rung.warmthMet && spokeThisSession;
+  // The server enforces a same-day cooldown after any DTR attempt (a deflect sets
+  // `dtr:lastAttemptDay`). Mirror it here so the commit button hides instead of staying
+  // active and only surfacing a "give it time" error when re-clicked.
+  const dtrLastAttempt = relationship?.flags['dtr:lastAttemptDay'];
+  const dtrOnCooldown =
+    scene != null && typeof dtrLastAttempt === 'number' && scene.day - dtrLastAttempt < DTR_COOLDOWN_DAYS;
+  const dtrReady = !!rung && rung.warmthMet && spokeThisSession && !dtrOnCooldown;
   // The date is over (evaluated or any terminal path) → no more composing, and the
   // actions collapse to "New date". Mirrors dateConcluded so the lock clears in step.
   const locked = !!evalResult || !!walkout || leftEarly || !!dtrOutcome?.ended || brokeUp;
+  // The id of the trailing character reply, when it's a plain line the player may
+  // regenerate (not a consequence-bearing walkout/farewell/etc, and not mid-stream
+  // or mid-recovery). Drives the small "rewrite this reply" button on that bubble.
+  const lastMsg = messages[messages.length - 1];
+  const regenId =
+    lastMsg &&
+    lastMsg.role === 'character' &&
+    !lastMsg.metadata?.walkout &&
+    !lastMsg.metadata?.left &&
+    !lastMsg.metadata?.farewell &&
+    !lastMsg.metadata?.breakupIntent &&
+    messages.some((m) => m.role === 'player') && // a reply to your turn, not the opener
+    !locked &&
+    !streaming.active &&
+    !busy &&
+    !failed &&
+    !breakupPending
+      ? lastMsg.id
+      : null;
   const locationName = session.locationId
     ? session.locationId.startsWith('room:')
       ? t('chat.loc.room', { name: character.name })
@@ -1132,15 +1260,26 @@ export function Chat() {
   const evalBanner = evalResult
     ? evalResult.evaluated
       ? (
-        <Banner kind="ok">
-          <strong>{t('chat.evalTitle')}</strong>{' '}
-          {t('chat.evalDetail', { mood: evalResult.mood, summary: evalResult.summaryLine, count: evalResult.memoriesWritten })}
-        </Banner>
+        <div className="date-moment date-recap">
+          <div className="date-moment-seal" aria-hidden="true">❧</div>
+          <div className="date-recap-head">
+            <div className="date-moment-kicker">{t('chat.recapKicker')}</div>
+            {evalResult.mood && <span className="date-recap-mood">{evalResult.mood}</span>}
+          </div>
+          {evalResult.summaryLine && <p className="date-recap-summary">{evalResult.summaryLine}</p>}
+          <div className="date-recap-ledger">
+            <span className="date-recap-keepsake">
+              <Icon name="chronicle" size={13} /> {t('chat.recapMemories', { count: evalResult.memoriesWritten })}
+            </span>
+          </div>
+        </div>
       )
       : (
-        <Banner kind="error">
-          <strong>{t('chat.evalFailedTitle')}</strong>{t('chat.evalFailedBody', { error: evalResult.evalError })}
-        </Banner>
+        <div className="date-moment date-recap date-recap-failed">
+          <div className="date-moment-seal" aria-hidden="true">⚠</div>
+          <div className="date-moment-kicker">{t('chat.evalFailedTitle')}</div>
+          <p className="date-recap-summary">{t('chat.recapFailedBody', { error: evalResult.evalError })}</p>
+        </div>
       )
     : null;
 
@@ -1241,7 +1380,17 @@ export function Chat() {
           </div>
         );
       }
-      return <Banner kind="info">{t('chat.dtrNotYet')}</Banner>;
+      // A non-terminal 'deflect' is only transient feedback — show it while the date is
+      // live, but never let it shadow the end-of-date evaluation (returned just below).
+      // A soft, moonlit "not yet" card (sibling to the accept/backfire moments above).
+      if (!evalResult)
+        return (
+          <div className="date-moment date-moment-deflect">
+            <div className="date-moment-seal" aria-hidden="true">☾</div>
+            <div className="date-moment-kicker">{t('chat.dtrNotYetKicker')}</div>
+            <p className="date-moment-body">{t('chat.dtrNotYet')}</p>
+          </div>
+        );
     }
     if (evalResult) return evalBanner;
     return null;
@@ -1369,7 +1518,12 @@ export function Chat() {
             )}
           </div>
           {!locked && (
-            <DateTrajectory value={rapport ?? 50} label={vibe ?? t('chat.settlingIn')} pulse={rapportPulse} />
+            <DateTrajectory
+              value={rapport}
+              anchor={startingRapport(character.guardedness)}
+              label={vibe ?? t('chat.settlingIn')}
+              pulse={rapportPulse}
+            />
           )}
           <div className="messages date-reel">
             {messages.length === 0 && !streaming.active && (
@@ -1400,14 +1554,24 @@ export function Chat() {
                 key={m.id}
                 className={`date-msg ${m.role}${m.role === 'narrator' && m.metadata?.venueFlavor === true ? ' venue-flavor' : ''}`}
               >
-                {m.text}
+                {m.role === 'character' ? <RichLine text={m.text} /> : m.text}
+                {m.id === regenId && (
+                  <button
+                    className="date-regen-btn"
+                    onClick={() => void regenerate()}
+                    aria-label={t('chat.regen')}
+                    title={t('chat.regenTitle')}
+                  >
+                    <Icon name="refresh" size={13} />
+                  </button>
+                )}
               </div>
             ))}
             {streaming.active && (
               <div className="date-msg character">
                 {streaming.text.trim() ? (
                   <>
-                    {streaming.text.trimStart()}
+                    <RichLine text={streaming.text.trimStart()} open />
                     <span className="date-cursor" />
                   </>
                 ) : (

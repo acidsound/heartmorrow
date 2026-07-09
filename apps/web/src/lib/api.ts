@@ -136,6 +136,25 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Read an error Response into a `{ message, details }` pair, preferring the
+ * server's `{ error, details }` JSON body and falling back to the status text or
+ * a supplied sentence so the result is never empty. The body can only be read
+ * once, so call this exactly once per failed Response.
+ */
+async function parseErrorBody(res: Response, fallback: string): Promise<{ message: string; details?: unknown }> {
+  let message = res.statusText || fallback;
+  let details: unknown;
+  try {
+    const body = await res.json();
+    if (body && typeof body.error === 'string' && body.error) message = body.error;
+    details = body?.details;
+  } catch {
+    /* non-JSON error body — keep the fallback message */
+  }
+  return { message: message || fallback, details };
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = localeHeaders(options.headers);
   // Only declare a JSON content-type when we actually send a JSON body. A POST
@@ -146,15 +165,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   }
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
   if (!res.ok) {
-    let message = res.statusText;
-    let details: unknown;
-    try {
-      const body = await res.json();
-      message = body.error ?? message;
-      details = body.details;
-    } catch {
-      /* non-JSON error body */
-    }
+    const { message, details } = await parseErrorBody(res, `Request failed (${res.status}).`);
     throw new ApiError(message, res.status, details);
   }
   if (res.status === 204) return undefined as T;
@@ -184,12 +195,7 @@ export function assetUrl(relativePath: string): string {
 async function downloadShareFile(path: string, init: RequestInit, fallbackName: string): Promise<void> {
   const res = await fetch(`${BASE}${path}`, { ...init, headers: localeHeaders(init.headers) });
   if (!res.ok) {
-    let message = res.statusText;
-    try {
-      message = (await res.json()).error ?? message;
-    } catch {
-      /* non-JSON error body */
-    }
+    const { message } = await parseErrorBody(res, `Download failed (${res.status}).`);
     throw new ApiError(message, res.status);
   }
   const blob = await res.blob();
@@ -211,15 +217,7 @@ async function postShareFile<T>(path: string, file: File): Promise<T> {
   form.append('file', file);
   const res = await fetch(`${BASE}${path}`, { method: 'POST', body: form, headers: localeHeaders() });
   if (!res.ok) {
-    let message = res.statusText;
-    let details: unknown;
-    try {
-      const body = await res.json();
-      message = body.error ?? message;
-      details = body.details;
-    } catch {
-      /* non-JSON error body */
-    }
+    const { message, details } = await parseErrorBody(res, `Upload failed (${res.status}).`);
     throw new ApiError(message, res.status, details);
   }
   return res.json() as Promise<T>;
@@ -262,7 +260,8 @@ export async function streamChat(
     signal,
   });
   if (!res.ok || !res.body) {
-    handlers.onError?.(`Server returned ${res.status}`);
+    const { message } = await parseErrorBody(res, `The server couldn’t start the reply (${res.status}).`);
+    handlers.onError?.(message);
     return;
   }
   await pumpSse(res, handlers);
@@ -285,7 +284,31 @@ export async function streamRetry(
     signal,
   });
   if (!res.ok || !res.body) {
-    handlers.onError?.(`Server returned ${res.status}`);
+    const { message } = await parseErrorBody(res, `The server couldn’t start the reply (${res.status}).`);
+    handlers.onError?.(message);
+    return;
+  }
+  await pumpSse(res, handlers);
+}
+
+/**
+ * Regenerate the character's MOST RECENT reply (a bad/looping line). The server
+ * drops the trailing reply and rewrites it against the same player turn, streaming
+ * the same delta/done/error/notice events as {@link streamChat}. It does NOT re-run
+ * the relationship judge — a regenerate only rewrites the prose.
+ */
+export async function streamRegenerate(
+  sessionId: string,
+  handlers: StreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${BASE}/conversations/${sessionId}/regenerate-stream`, {
+    method: 'POST',
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    const { message } = await parseErrorBody(res, `The server couldn’t start the reply (${res.status}).`);
+    handlers.onError?.(message);
     return;
   }
   await pumpSse(res, handlers);
@@ -444,7 +467,8 @@ export const api = {
     patch<WorldNote>(`/world-notes/${noteId}`, patchInput),
   deleteWorldNote: (noteId: string) => del<{ ok: true }>(`/world-notes/${noteId}`),
   getWorldState: (worldId: string) => get<WorldState>(`/worlds/${worldId}/state`),
-  sleep: (worldId: string) => post<SleepResponse>(`/worlds/${worldId}/sleep`),
+  sleep: (worldId: string, expectedDay?: number) =>
+    post<SleepResponse>(`/worlds/${worldId}/sleep`, expectedDay != null ? { expectedDay } : undefined),
   worldAvailability: (worldId: string) =>
     get<Array<{ characterId: string; available: boolean; reason: string | null }>>(`/worlds/${worldId}/availability`),
   /** The world's single in-progress date (for auto-resume + locking actions), or null. */
@@ -492,12 +516,7 @@ export const api = {
     form.append('file', file);
     const res = await fetch(`${BASE}/assets`, { method: 'POST', body: form, headers: localeHeaders() });
     if (!res.ok) {
-      let message = res.statusText;
-      try {
-        message = (await res.json()).error ?? message;
-      } catch {
-        /* ignore */
-      }
+      const { message } = await parseErrorBody(res, `Upload failed (${res.status}).`);
       throw new ApiError(message, res.status);
     }
     return res.json();
@@ -631,6 +650,16 @@ export const api = {
       relationshipDelta: Partial<Record<string, number>>;
       giftReaction?: { line: string; expression: string; sentiment: 'positive' | 'neutral' | 'negative'; itemName: string } | null;
     }>(`/phone/threads/${characterId}/retry-reply`),
+  /** Regenerate the character's last text reply (a bad/looping line). Rewrites the
+   *  prose only — the relationship judge does NOT re-run. Same shape as phoneSend. */
+  phoneRegenerateReply: (characterId: string) =>
+    post<{
+      playerMessage: TextMessage;
+      reply: TextMessage | null;
+      error: string | null;
+      relationshipDelta: Partial<Record<string, number>>;
+      giftReaction?: { line: string; expression: string; sentiment: 'positive' | 'neutral' | 'negative'; itemName: string } | null;
+    }>(`/phone/threads/${characterId}/regenerate-reply`),
   phoneClaimGift: (textId: string) =>
     post<{ item: ShopItem; inventoryItem: InventoryItem }>(`/phone/messages/${textId}/claim-gift`),
   phoneEmails: (worldId?: string) => get<Email[]>(`/phone/emails${worldQuery(worldId)}`),

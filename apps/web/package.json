@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:mock": "vite",
+    "start": "vite preview --host 127.0.0.1 --port 5173",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
@@ -34,6 +35,6 @@
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
-    "vitest": "^2.1.8"
+    "vitest": "^3.2.6"
   }
 }

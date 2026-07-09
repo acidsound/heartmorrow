@@ -6,9 +6,12 @@
     "settlingIn": "settling in",
     "retry": "Retry",
     "retrying": "Retrying…",
+    "regen": "Regenerate reply",
+    "regenTitle": "Rewrite this reply (doesn't change how the date is scored)",
     "sendFailed": "Your message didn't send.",
     "replyFailed": "They didn't reply — something went wrong.",
     "replyDropped": "The reply didn't come through.",
+    "evalFailed": "Couldn't evaluate the date — the model may be unavailable. Your date is still open; try ending it again.",
     "tonightsPlan": "Tonight's plan",
     "onADateTitle": "You're on a date",
     "onADateBody": "Your date with {name} is still going — your progress is safe.",
@@ -47,10 +50,10 @@
     "outOfEnergy": "You're out of energy for today — End the day from the menu to rest, then come back tomorrow.",
     "settingScene": "Setting the scene…",
     "begin": "Begin",
-    "evalTitle": "Date evaluated.",
-    "evalDetail": "Mood: {mood}. {summary} ({count, plural, one {# memory saved} other {# memories saved}})",
-    "evalFailedTitle": "Evaluation failed safely",
-    "evalFailedBody": " — no stats were changed. {error}",
+    "recapKicker": "How the evening went",
+    "recapMemories": "{count, plural, =0 {No new memories kept} one {# memory kept} other {# memories kept}}",
+    "evalFailedTitle": "Evaluation didn't finish",
+    "recapFailedBody": "No stats were changed — nothing was recorded. {error}",
     "endingKicker": "A happy ending",
     "endingTitle": "\"{title}\"",
     "endingNote": "You've built something that lasts. Read it any time in the phone's Endings — and the game goes on.",
@@ -76,6 +79,7 @@
     "dtrBackfireTitle": "It didn't go as you hoped.",
     "dtrEnded": "The date ended.",
     "dtrNotYet": "Not yet — give it a little more time.",
+    "dtrNotYetKicker": "Not just yet",
     "yourCompanion": "Your companion",
     "brokenUp": "Broken up",
     "onTheRocks": "On the rocks",
@@ -253,6 +257,7 @@
     "memoriesCollapsed": "{count, plural, one {# memory kept — tap <0>Show</0> to read them.} other {# memories kept — tap <0>Show</0> to read them.}}",
     "importanceTitle": "importance {n}/5",
     "importanceAria": "importance {n} of 5",
+    "weight": "Weight",
     "fromDate": "from a date",
     "addedManually": "added manually",
     "deleteMemory": "Delete memory",
@@ -344,6 +349,8 @@
     "purse": "Purse",
     "generateItems": "Generate items",
     "purchased": "Purchased {name}!",
+    "resultAcquired": "Acquired",
+    "resultStocked": "Items stocked",
     "genFailed": "Item generation failed: {error}",
     "saved": "{count, plural, one {Saved # item to the shop.} other {Saved # items to the shop.}}",
     "workshop": "Creator Workshop",
@@ -401,7 +408,8 @@
     "using": "Using…",
     "use": "Use",
     "giveHint": "Give on a date or by text",
-    "used": "Used {name}."
+    "used": "Used {name}.",
+    "resultUsed": "Used"
   },
   "dashboard": {
     "eyebrow": "A lamplit almanac of the heart",
@@ -412,6 +420,12 @@
       "afternoon": "Good afternoon",
       "evening": "Good evening",
       "night": "Still up"
+    },
+    "greetingMark": {
+      "morning": ".",
+      "afternoon": ".",
+      "evening": ".",
+      "night": "?"
     },
     "line": {
       "morning": "A fresh day is open. Who will you spend it with?",
@@ -619,8 +633,16 @@
     "totalTokens": "total tokens",
     "totalTime": "total time",
     "avgTokSec": "avg tok/sec",
+    "avgTokSecTitle": "Token-weighted generation speed across cases. It's accurate when your endpoint reports per-response stats (e.g. LM Studio's native API — a base URL ending /api/v0); otherwise the ≈ numbers are end-to-end estimates that include prompt processing and transport, so they under-report true speed. For accurate numbers, set up the best available API in Settings.",
+    "speedMeasuredTitle": "Real decode speed reported by your endpoint (e.g. LM Studio's native API) — measured over generation time only, excluding prompt processing.",
+    "speedEstimatedTitle": "≈ Estimate: tokens ÷ full round-trip time, so it includes prompt processing + network and under-reports true generation speed. For an accurate decode rate, use an endpoint that reports per-response stats (e.g. LM Studio's native API) and configure it in Settings.",
+    "speedFoot": "≈ speeds are end-to-end estimates (they include prompt processing + transport, so they under-report true generation speed). For real decode speed, point the bench at an endpoint that reports generation stats — e.g. LM Studio's native API (Settings → base URL ending /api/v0).",
     "judgeAgreement": "judge agreement",
     "nJudged": "{count} judged",
+    "fellBack": "fell back",
+    "fellBackTitle": "How many cases couldn't use the requested structured-output mode and fell back to a looser one (json_schema → json_object → prompt_only). This is a capability signal, not a failure — the cases still ran.",
+    "fallbackBadgeTitle": "This case fell back from the requested structured-output mode to a looser one because your endpoint rejected the requested format. Not a failure — the output was still produced and validated.",
+    "nFellBack": "{count} fell back",
     "perCase": "Per case",
     "chTokens": "Tokens (in / out)",
     "chLatency": "Latency",
@@ -660,6 +682,8 @@
     "select": "Select",
     "selAll": "All",
     "selJudges": "Judges",
+    "selGenerators": "Generators",
+    "selProse": "Prose",
     "selQuick": "Quick",
     "selNone": "None",
     "dialogueTurns": "Dialogue turns: {n}",
@@ -734,6 +758,8 @@
     "export": "Export…",
     "exportDirtyHint": "Save your changes first — export ships the saved world, so unsaved edits won't be included.",
     "worldSaved": "World saved!",
+    "savedKicker": "Saved",
+    "genKicker": "Generated",
     "noun": "world",
     "untitledWorld": "Untitled world",
     "worldsHeader": "Worlds",
@@ -936,6 +962,8 @@
     "profileGenerated": "Profile generated — review and Save.",
     "profileGenFailed": "Profile generation failed: {error}",
     "characterGenerated": "Character generated — review every tab and Save.",
+    "savedKicker": "Saved",
+    "genKicker": "Generated",
     "characterGenFailed": "Generation failed: {error}",
     "untitledCharacter": "Untitled character"
   },
@@ -1037,6 +1065,16 @@
         "tag": "native /api/v0",
         "desc": "LM Studio's native API — richer model listing (loaded state, context, quant) and per-response speed stats. Point Base URL at …/api/v0."
       },
+      "ollama": {
+        "name": "Ollama",
+        "tag": "native /api/chat",
+        "desc": "Ollama's native API — toggle the model's thinking on/off or set a reasoning level, plus model listing with loaded state and quant. Point Base URL at the server root (e.g. http://localhost:11434)."
+      },
+      "koboldcpp": {
+        "name": "KoboldCpp",
+        "tag": "native /api/v1",
+        "desc": "KoboldCpp's native API — a text-completion endpoint, so pick the instruction template that matches your loaded model. Point Base URL at the server root (e.g. http://localhost:5001)."
+      },
       "anthropic": {
         "name": "Anthropic",
         "tag": "messages",
@@ -1104,6 +1142,8 @@
       "baseUrl": "Base URL",
       "baseUrlHintAnthropic": "e.g. https://api.anthropic.com/v1 (or your compatible proxy)",
       "baseUrlHintLmstudio": "e.g. http://localhost:1234/api/v0 (LM Studio native API)",
+      "baseUrlHintOllama": "e.g. http://localhost:11434 (the Ollama server root — not the /v1 path).",
+      "baseUrlHintKobold": "e.g. http://localhost:5001 (the KoboldCpp server root — not the /v1 path).",
       "baseUrlHintDefault": "e.g. http://localhost:1234/v1 or http://localhost:1234/",
       "apiKey": "API key",
       "apiKeyHintSet": "A key is set. Leave blank to keep it.",
@@ -1114,6 +1154,27 @@
       "apiKeyPlaceholderOptional": "optional",
       "anthropicVersion": "Anthropic version",
       "anthropicVersionHint": "Sent as the anthropic-version header. Leave at the default unless your endpoint needs a newer revision.",
+      "ollamaThink": "Thinking",
+      "ollamaThinkHint": "Ollama's reasoning control. “Model default” leaves it unset — the safe choice for models without a thinking mode, which reject the option. On / Off force it; Low–Max set the trace depth for models that support reasoning levels (e.g. gpt-oss). The reasoning trace is never shown in replies.",
+      "ollamaThinkOpts": {
+        "default": "Model default",
+        "off": "Off",
+        "on": "On",
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "max": "Max"
+      },
+      "koboldTemplate": "Instruction template",
+      "koboldTemplateHint": "KoboldCpp's native API is a raw text-completion endpoint, so Heartmorrow formats each turn for you. Pick the template that matches your loaded model's training format — the wrong one still works but gives worse replies. Alpaca is a safe general default; use ChatML / Llama 3 / Mistral / Vicuna to match those families, or Plain for base models.",
+      "koboldTemplateOpts": {
+        "alpaca": "Alpaca (### Instruction)",
+        "chatml": "ChatML (<|im_start|>)",
+        "llama3": "Llama 3",
+        "vicuna": "Vicuna (USER/ASSISTANT)",
+        "mistral": "Mistral ([INST])",
+        "plain": "Plain (no markers)"
+      },
       "model": "Model",
       "modelHint": "Type any model name, or pick from the loaded list below.",
       "pickFrom": "{count, plural, one {Pick from # model…} other {Pick from # models…}}",
@@ -1238,6 +1299,13 @@
       "topics": "Topics"
     },
     "topicOf": "Topic {n} of {total}",
+    "support": {
+      "kicker": "Community",
+      "title": "Support & updates",
+      "blurb": "Questions, bug reports, ideas, or just want to follow along? Join the Discord for support, announcements, and the community — or browse the source, releases, and open issues on GitHub.",
+      "cta": "Join the Discord",
+      "ctaGithub": "View on GitHub"
+    },
     "cats": {
       "getting-started": {
         "label": "Getting started",
@@ -1254,6 +1322,8 @@
             "bullets": [
               "OpenAI-compatible: works with LM Studio, Ollama, llama.cpp, vLLM, and similar local servers. Point the Base URL at your own server.",
               "LM Studio: its own native connection, with richer model details and per-response speed stats.",
+              "Ollama: its own native connection, which adds a Thinking control — turn a model's reasoning on or off, or set its depth (Low–Max for models that support levels).",
+              "KoboldCpp: its own native connection. Because it's a raw text engine, pick the Instruction template that matches your loaded model (Alpaca, ChatML, Llama 3, and so on).",
               "Anthropic: a hosted service that needs an API key.",
               "Local models usually need no key; hosted services do.",
               "There's a separate option for generating character portraits, but it's optional and not needed to play."
@@ -1319,14 +1389,15 @@
             "heading": "Talking, live",
             "body": [
               "A date is a back-and-forth conversation. Type whatever you want in the box and send it; the character types back in real time, with a typing indicator while they think and a portrait whose expression shifts to match their mood. There are no scripted choices — say anything, in your own words.",
-              "Above the box are optional intent chips that frame how a line is meant: Flirt, Tease, and Open Up are always there, and Reassure and Apologize appear when there's tension to smooth over. They're never required, and they don't move anything by themselves — they just tell the character how you meant a message to land, and a move that fits the moment reads better than one that doesn't."
+              "Above the box are optional intent chips that frame how a line is meant: Flirt, Tease, and Open Up are always there, and Reassure and Apologize appear when there's tension to smooth over. They're never required, and they don't move anything by themselves — they just tell the character how you meant a message to land, and a move that fits the moment reads better than one that doesn't.",
+              "If a reply comes out garbled or repetitive, hover the character's most recent line and tap the small refresh button to regenerate it. That rewrites just that reply — it doesn't change how the message was scored or how the date is going, so it's only fixing the wording. (Texting has the same button under a character's last text.)"
             ]
           },
           {
             "heading": "Reading the vibe",
             "body": [
-              "Above the conversation sits a live trajectory bar. It starts in the middle (neutral) and, after your messages, glides toward \"warming\" on the right when a line lands well or toward \"cooling\" on the left when it falls flat, with a little +N or −N flourish and a one-word read like \"warming to you\" or \"a bit awkward.\" The bar never shows numbers — just the feel of the moment.",
-              "Two biases are worth knowing. Warmth is harder to build than to lose, and you can't coast: a forgettable, going-nowhere message nudges the vibe down a touch even when it isn't bad. Reserved, guarded people also open cooler and warm more slowly, so they take real effort to win over.",
+              "Above the conversation sits a live trajectory bar. Its center seam marks where this date opened, and after your messages the fill glides toward \"warming\" on the right when a line lands well or toward \"cooling\" on the left when it falls flat, with a little +N or −N flourish and a one-word read like \"warming to you\" or \"a bit awkward.\" The bar never shows numbers — just the feel of the moment.",
+              "Two biases are worth knowing. Warmth is harder to build than to lose, and you can't build by coasting: a forgettable, going-nowhere message won't warm the vibe (with a guarded person it slips a little), so keeping a date warming takes genuine effort. Reserved, guarded people also open cooler — their bar begins left of center — and warm more slowly, so they take real effort to win over.",
               "How the night ends up shapes the aftermath. A genuinely great date boosts your bond; a flat or sour one costs you ground and adds tension — and repeated bad nights can put a committed relationship on the rocks."
             ]
           },
@@ -1368,15 +1439,15 @@
           {
             "heading": "The live read: every message warms or cools the vibe",
             "body": [
-              "While you are on a date, each message you send is read on its own for how it lands with this person right now, how engaged, warm, attentive, and genuine it is. A message that truly connects warms the vibe, a low-effort or self-absorbed one cools it, and an outright cruel or hostile line cools it hard.",
-              "There is no coasting. A flat, forgettable turn, a one-liner, a shrug, a quick \"haha nice\", does not hold the vibe steady. It quietly drifts it down. Effort is the bar: to keep a date warming, you have to keep actually showing up in what you say.",
+              "While you are on a date, each message you send is read on its own for how it lands with this person right now, how engaged, warm, attentive, and genuine it is. A message that truly connects warms the vibe, a flat or self-absorbed one that gives little back cools it, and an outright cruel or hostile line cools it hard. A merely forgettable, harmless turn moves nothing on its own.",
+              "You can't build by coasting. A flat, forgettable turn, a one-liner, a shrug, a quick \"haha nice\", won't warm the vibe; it holds roughly where it is (with a guarded person it slips a little). Effort is the bar: to keep a date warming, you have to keep actually showing up in what you say, and genuinely poor or cold turns will pull it down.",
               "Warmth is harder to build than to lose. A good moment nudges the vibe up, but a bad one pulls it down by more, so one cold or careless message can undo a couple of nice ones. You can always feel where you stand from the live read on the date screen, which shows a mood like \"warming to you,\" \"a bit awkward,\" or \"cooling off\" rather than a number."
             ]
           },
           {
             "heading": "Let the vibe cool too far and they leave",
             "body": [
-              "The vibe starts near the middle of its range. A date is something to earn up from neutral, not a full meter you slowly spend down. From there, every message moves it.",
+              "The vibe starts where this date opens — neutral for an easygoing person, a little cooler for a guarded one, whose bar begins left of center. A date is something to earn upward from there, not a full meter you slowly spend down. From there, every message moves it.",
               "If you let it crater, the date is over. Once the vibe bottoms out, the read shows them \"losing interest,\" and on your next message they get up and leave. Being walked out on this way is a real setback to the relationship, so it is worth reading the room before things sink that low."
             ]
           },
@@ -1662,7 +1733,7 @@
             "heading": "Habits that pay off",
             "body": [],
             "bullets": [
-              "Put real effort into what you say. Low-effort, going-nowhere messages quietly cool a date — there is no coasting.",
+              "Put real effort into what you say. A warming date has to be earned turn by turn — forgettable, going-nowhere messages won't build it, and flat or careless ones cool it.",
               "Learn the person. Their likes, dislikes, and boundaries shape how the night is judged, so play to what they care about and steer clear of what they don't.",
               "Time your gifts. A gift is a small, thoughtful nudge, not a shortcut — the first one a day lands in full, a second lands at about half, and more do nothing.",
               "Tend your commitments. The closer you are, the sooner neglect stings — a live-in partner starts to feel ignored after only a few days.",

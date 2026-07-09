@@ -24,8 +24,9 @@ import {
   type BenchSettingsSnapshot,
   type Message,
   type LlmSettings,
+  type StructuredOutputMode,
 } from '@dsim/shared';
-import type { TokenUsage } from '../../llm/types';
+import type { TokenUsage, GenerationStats } from '../../llm/types';
 import type { ChatMessage } from '../../llm/types';
 import { getAdapter } from '../../llm/provider';
 import { callStructuredLlm } from '../../llm/structured';
@@ -57,8 +58,20 @@ function sumChars(messages: ChatMessage[]): number {
   }, 0);
 }
 
-/** Build one call metric, preferring the endpoint's reported usage and falling
- *  back to a chars/4 estimate (flagged) when it reports none. */
+/**
+ * Build one call metric, preferring the endpoint's reported usage and falling
+ * back to a chars/4 estimate (flagged) when it reports none.
+ *
+ * tok/sec is computed over the actual DECODE time, not the round-trip latency:
+ *  - If the endpoint reports generation stats (e.g. LM Studio's native API), use its
+ *    `generationTimeSec` (or derive from `tokensPerSecond`). This excludes prompt
+ *    prefill + transport, so it's the model's true decode rate. (`speedMeasured`.)
+ *  - Otherwise fall back to the full round-trip `latencyMs`. This is an OVER-estimate
+ *    of decode time (it includes prefill + network), so the resulting tok/sec is a
+ *    conservative UNDER-estimate of real generation speed — flagged via `speedMeasured:
+ *    false` so the UI can mark it as an estimate.
+ *  - A call that produced no tokens contributes no decode time (genTimeMs 0).
+ */
 function buildMetric(
   label: string,
   latencyMs: number,
@@ -66,6 +79,7 @@ function buildMetric(
   promptChars: number,
   completionChars: number,
   ok: boolean,
+  stats?: GenerationStats,
 ): BenchCallMetric {
   const pt = usage?.promptTokens ?? null;
   const ct = usage?.completionTokens ?? null;
@@ -73,22 +87,50 @@ function buildMetric(
   const promptTokens = pt ?? estTokens(promptChars);
   const completionTokens = ct ?? estTokens(completionChars);
   const totalTokens = usage?.totalTokens ?? promptTokens + completionTokens;
-  const tokensPerSec = latencyMs > 0 && completionTokens > 0 ? completionTokens / (latencyMs / 1000) : null;
-  return { label, promptTokens, completionTokens, totalTokens, promptChars, completionChars, tokensEstimated: estimated, latencyMs, attempts: 1, ok, tokensPerSec };
+  let genTimeMs = 0;
+  let speedMeasured = false;
+  if (completionTokens > 0) {
+    if (stats?.generationTimeSec != null && stats.generationTimeSec > 0) {
+      genTimeMs = stats.generationTimeSec * 1000;
+      speedMeasured = true;
+    } else if (stats?.tokensPerSecond != null && stats.tokensPerSecond > 0) {
+      genTimeMs = (completionTokens / stats.tokensPerSecond) * 1000;
+      speedMeasured = true;
+    } else if (ok && latencyMs > 0) {
+      genTimeMs = latencyMs; // end-to-end fallback (includes prefill + transport)
+    }
+  }
+  const tokensPerSec = genTimeMs > 0 && completionTokens > 0 ? completionTokens / (genTimeMs / 1000) : null;
+  return { label, promptTokens, completionTokens, totalTokens, promptChars, completionChars, tokensEstimated: estimated, latencyMs, attempts: 1, ok, tokensPerSec, genTimeMs, speedMeasured };
+}
+
+/** True when at least one call generated tokens AND every token-bearing call's speed
+ *  was endpoint-measured (so a combined/rolled-up rate is honestly "measured"). */
+function allMeasured(calls: BenchCallMetric[]): boolean {
+  let tokenBearing = 0, measured = 0;
+  for (const c of calls) {
+    if ((c.completionTokens ?? 0) > 0) {
+      tokenBearing += 1;
+      if (c.speedMeasured) measured += 1;
+    }
+  }
+  return tokenBearing > 0 && measured === tokenBearing;
 }
 
 /** Roll several calls (e.g. a dialogue turn's structured retries) into one metric. */
 function combineCalls(label: string, calls: BenchCallMetric[]): BenchCallMetric {
-  let pt = 0, ct = 0, lat = 0, est = false, ok = true;
+  let pt = 0, ct = 0, lat = 0, gen = 0, est = false, ok = true;
   for (const c of calls) {
     pt += c.promptTokens ?? 0;
     ct += c.completionTokens ?? 0;
     lat += c.latencyMs;
+    gen += c.genTimeMs;
     if (c.tokensEstimated) est = true;
     if (!c.ok) ok = false;
   }
-  const tps = lat > 0 && ct > 0 ? ct / (lat / 1000) : null;
-  return { label, promptTokens: pt, completionTokens: ct, totalTokens: pt + ct, promptChars: 0, completionChars: 0, tokensEstimated: est, latencyMs: lat, attempts: calls.length || 1, ok, tokensPerSec: tps };
+  // Rate over summed DECODE time, not summed latency — composes correctly.
+  const tps = gen > 0 && ct > 0 ? ct / (gen / 1000) : null;
+  return { label, promptTokens: pt, completionTokens: ct, totalTokens: pt + ct, promptChars: 0, completionChars: 0, tokensEstimated: est, latencyMs: lat, attempts: calls.length || 1, ok, tokensPerSec: tps, genTimeMs: gen, speedMeasured: allMeasured(calls) };
 }
 
 /** Case-level rollup across every call the case made. */
@@ -96,19 +138,23 @@ function rollup(calls: BenchCallMetric[]): {
   promptTokens: number;
   completionTokens: number;
   totalLatency: number;
+  genTimeMs: number;
   attempts: number;
   tps: number | null;
   estimated: boolean;
+  speedMeasured: boolean;
 } {
-  let promptTokens = 0, completionTokens = 0, totalLatency = 0, estimated = false;
+  let promptTokens = 0, completionTokens = 0, totalLatency = 0, gen = 0, estimated = false;
   for (const c of calls) {
     promptTokens += c.promptTokens ?? 0;
     completionTokens += c.completionTokens ?? 0;
     totalLatency += c.latencyMs;
+    gen += c.genTimeMs;
     if (c.tokensEstimated) estimated = true;
   }
-  const tps = totalLatency > 0 && completionTokens > 0 ? completionTokens / (totalLatency / 1000) : null;
-  return { promptTokens, completionTokens, totalLatency, attempts: calls.length, tps, estimated };
+  // tok/sec over DECODE time (endpoint-measured where available), not round-trip latency.
+  const tps = gen > 0 && completionTokens > 0 ? completionTokens / (gen / 1000) : null;
+  return { promptTokens, completionTokens, totalLatency, genTimeMs: gen, attempts: calls.length, tps, estimated, speedMeasured: allMeasured(calls) };
 }
 
 // --- dialogue helpers -------------------------------------------------------
@@ -174,9 +220,11 @@ async function runStructured(def: BenchCaseDef, settings: LlmSettings, signal?: 
     schemaName: spec.schemaName,
     maxTokens: spec.maxTokens,
     signal,
-    onAttempt: (info) => calls.push(buildMetric(`call ${info.call}`, info.latencyMs, info.usage, info.promptChars, info.completionChars, info.ok)),
+    onAttempt: (info) => calls.push(buildMetric(`call ${info.call}`, info.latencyMs, info.usage, info.promptChars, info.completionChars, info.ok, info.stats)),
   });
   const r = rollup(calls);
+  const structuredMode =
+    res.requestedMode && res.finalMode ? { requested: res.requestedMode, final: res.finalMode } : null;
 
   let comparison: BenchComparison | null = null;
   let judgeFailReason = '';
@@ -215,11 +263,14 @@ async function runStructured(def: BenchCaseDef, settings: LlmSettings, signal?: 
     attempts: r.attempts,
     tokensPerSec: r.tps,
     tokensEstimated: r.estimated,
+    genTimeMs: r.genTimeMs,
+    speedMeasured: r.speedMeasured,
     output: res.ok ? JSON.stringify(res.data, null, 2) : res.lastRaw ?? '',
     transcript: [],
     repetitionMax: null,
     repetitionAvg: null,
     comparison,
+    structuredMode,
   });
 }
 
@@ -242,6 +293,12 @@ async function runDialogue(
   const reps: number[] = [];
   let failed = false;
   let firstError = '';
+  /** Structured-output mode tracking for the texting case (one structured call per
+   *  turn). `reqMode` is the requested mode; `degradedFinal` captures the mode a turn
+   *  fell back to (if any) — every turn re-discovers the same fallback deterministically,
+   *  so a single fell-back turn is enough to mark the whole case as having fallen back. */
+  let reqMode: StructuredOutputMode | null = null;
+  let degradedFinal: StructuredOutputMode | null = null;
 
   for (let i = 0; i < dialogueTurns; i++) {
     if (signal?.aborted) break; // honor cancellation between turns
@@ -253,7 +310,7 @@ async function runDialogue(
       try {
         const pr = await adapter.chat({ messages: pmsgs, temperature: Math.min(1, settings.temperature), maxTokens: 220 }, signal);
         playerLine = cleanLine(stripThink(pr.content)) || (d.playerScript[i % d.playerScript.length] ?? '…');
-        calls.push(buildMetric(`player ${i + 1}`, Date.now() - started, pr.usage, sumChars(pmsgs), pr.content.length, true));
+        calls.push(buildMetric(`player ${i + 1}`, Date.now() - started, pr.usage, sumChars(pmsgs), pr.content.length, true, pr.stats));
       } catch (err) {
         playerLine = d.playerScript[i % d.playerScript.length] ?? '…';
         calls.push(buildMetric(`player ${i + 1}`, Date.now() - started, undefined, sumChars(pmsgs), 0, false));
@@ -279,10 +336,12 @@ async function runDialogue(
         schemaName: 'BenchDialogueReply',
         maxTokens: d.maxTokens,
         signal,
-        onAttempt: (info) => sub.push(buildMetric(`reply ${i + 1}.${info.call}`, info.latencyMs, info.usage, info.promptChars, info.completionChars, info.ok)),
+        onAttempt: (info) => sub.push(buildMetric(`reply ${i + 1}.${info.call}`, info.latencyMs, info.usage, info.promptChars, info.completionChars, info.ok, info.stats)),
       });
       replyOk = res.ok;
       replyText = res.ok ? cleanLine(d.extractReply(res.data)) : '(structured reply failed)';
+      if (res.requestedMode) reqMode ??= res.requestedMode;
+      if (res.finalMode && res.requestedMode && res.finalMode !== res.requestedMode) degradedFinal = res.finalMode;
       if (!res.ok && !failed) { failed = true; firstError = res.error; }
       calls.push(...sub);
       turnMetric = combineCalls(`reply ${i + 1}`, sub);
@@ -293,7 +352,7 @@ async function runDialogue(
         const cleaned = cleanLine(stripThink(cr.content));
         replyOk = cleaned.length > 0;
         replyText = cleaned || '(empty reply)';
-        turnMetric = buildMetric(`reply ${i + 1}`, Date.now() - started, cr.usage, sumChars(cmsgs), cr.content.length, replyOk);
+        turnMetric = buildMetric(`reply ${i + 1}`, Date.now() - started, cr.usage, sumChars(cmsgs), cr.content.length, replyOk, cr.stats);
         calls.push(turnMetric);
       } catch (err) {
         replyOk = false;
@@ -348,11 +407,14 @@ async function runDialogue(
     attempts: r.attempts,
     tokensPerSec: r.tps,
     tokensEstimated: r.estimated,
+    genTimeMs: r.genTimeMs,
+    speedMeasured: r.speedMeasured,
     output: '',
     transcript,
     repetitionMax,
     repetitionAvg,
     comparison: null,
+    structuredMode: reqMode ? { requested: reqMode, final: degradedFinal ?? reqMode } : null,
   });
 }
 
@@ -397,20 +459,32 @@ export async function runBenchCase(
 // --- aggregation + persistence shape ---------------------------------------
 
 export function computeAggregate(results: BenchCaseResult[]): BenchAggregate {
-  let passed = 0, failed = 0, totalPrompt = 0, totalCompletion = 0, totalLatency = 0, estimated = false;
+  let passed = 0, failed = 0, totalPrompt = 0, totalCompletion = 0, totalLatency = 0, totalGenTime = 0, estimated = false;
+  let speedEstimated = false;
   let judgeCases = 0, closenessSum = 0;
+  let structuredFallbacks = 0;
+  const fallbackByMode: Record<string, number> = {};
   for (const res of results) {
     if (res.ok) passed += 1; else failed += 1;
     totalPrompt += res.promptTokens ?? 0;
     totalCompletion += res.completionTokens ?? 0;
     totalLatency += res.totalLatencyMs;
+    totalGenTime += res.genTimeMs;
     if (res.tokensEstimated) estimated = true;
+    // A token-bearing case that isn't endpoint-measured makes the run's speed an estimate.
+    if ((res.completionTokens ?? 0) > 0 && !res.speedMeasured) speedEstimated = true;
     if (res.comparison && res.comparison.closeness != null) {
       judgeCases += 1;
       closenessSum += res.comparison.closeness;
     }
+    // A fallback (final !== requested mode) is tracked, never failed.
+    if (res.structuredMode && res.structuredMode.final !== res.structuredMode.requested) {
+      structuredFallbacks += 1;
+      fallbackByMode[res.structuredMode.final] = (fallbackByMode[res.structuredMode.final] ?? 0) + 1;
+    }
   }
-  const avgTps = totalLatency > 0 && totalCompletion > 0 ? totalCompletion / (totalLatency / 1000) : null;
+  // Token-weighted decode rate over the cases' generation time (not round-trip latency).
+  const avgTps = totalGenTime > 0 && totalCompletion > 0 ? totalCompletion / (totalGenTime / 1000) : null;
   return {
     cases: results.length,
     passed,
@@ -422,6 +496,9 @@ export function computeAggregate(results: BenchCaseResult[]): BenchAggregate {
     judgeCases,
     avgCloseness: judgeCases ? closenessSum / judgeCases : null,
     tokensEstimated: estimated,
+    speedEstimated,
+    structuredFallbacks,
+    fallbackByMode,
   };
 }
 

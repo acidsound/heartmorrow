@@ -132,6 +132,13 @@
     "worldsShort": "세계",
     "debug": "디버그"
   },
+  "support": {
+    "discord": "Discord 참여하기",
+    "discordHint": "지원, 업데이트 및 커뮤니티",
+    "github": "GitHub에서 소스 보기",
+    "githubHint": "코드, 릴리스 및 이슈",
+    "versionTitle": "Heartmorrow {{version}} · 빌드 {{commit}}"
+  },
   "phase": {
     "morning": "아침",
     "afternoon": "오후",
@@ -344,8 +351,11 @@
     "activeWorld": "현재 세계",
     "clockTitle": "{phase} · {weekday} · {season}",
     "dayPhase": "{day}일차 · {phase}",
+    "dayNum": "{day}일 차",
     "weekendSuffix": " · 주말",
     "energy": "에너지",
+    "purse": "지갑",
+    "worth": "자산",
     "energyTitle": "오늘 남은 행동 횟수: {stamina}/{max}",
     "energyAria": "에너지: {stamina}/{max}",
     "cashOnHand": "보유 현금",

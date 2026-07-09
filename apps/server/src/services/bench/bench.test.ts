@@ -1,9 +1,33 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { resetDb, ScriptedAdapter } from '../../test/helpers';
 import { setAdapterOverride } from '../../llm/provider';
+import type { ChatAdapter, ChatRequest, ChatResult, GenerationStats, LlmModelInfo, TokenUsage } from '../../llm/types';
 import { buildBenchCatalog, getBenchCase, BENCH_CASES, BENCH_GROUPS } from './cases';
 import { runBenchCase, computeAggregate, buildRunSummary } from './runner';
 import { benchRunsStore, benchBaselinesStore } from './store';
+
+/** Adapter that returns a fixed payload PLUS an endpoint usage block and/or
+ *  generation stats — to exercise the bench's endpoint-measured tok/sec path. */
+class StatsAdapter implements ChatAdapter {
+  readonly name = 'stats';
+  calls = 0;
+  constructor(
+    private readonly payload: string,
+    private readonly extra: { usage?: TokenUsage; stats?: GenerationStats } = {},
+  ) {}
+  async chat(): Promise<ChatResult> {
+    this.calls += 1;
+    return { content: this.payload, usage: this.extra.usage, stats: this.extra.stats };
+  }
+  async streamChat(_req: ChatRequest, onDelta: (t: string) => void): Promise<ChatResult> {
+    const r = await this.chat();
+    onDelta(r.content);
+    return r;
+  }
+  async listModels(): Promise<LlmModelInfo[]> {
+    return [];
+  }
+}
 
 describe('bench catalog', () => {
   it('exposes every case across the declared groups', () => {
@@ -16,6 +40,20 @@ describe('bench catalog', () => {
     // ids are unique
     const ids = new Set(cat.cases.map((c) => c.id));
     expect(ids.size).toBe(cat.cases.length);
+  });
+
+  it('the Generators/Prose run-preset tags are sane', () => {
+    const cat = buildBenchCatalog('test-model');
+    const generators = cat.cases.filter((c) => c.tags.includes('generator'));
+    const prose = cat.cases.filter((c) => c.tags.includes('prose'));
+    // both presets actually select something
+    expect(generators.length).toBeGreaterThan(0);
+    expect(prose.length).toBeGreaterThan(0);
+    // tags only ride on generation cases, and the two buckets never overlap
+    for (const c of cat.cases) {
+      if (c.tags.length) expect(c.kind, `${c.id} kind`).toBe('generation');
+      expect(c.tags.includes('generator') && c.tags.includes('prose'), `${c.id} dual-tagged`).toBe(false);
+    }
   });
 
   it('every judge case has a baseline spec + scorer + built-in default; every case is runnable', () => {
@@ -117,6 +155,36 @@ describe('bench runner', () => {
     expect(res.comparison?.pass).toBe(true); // off by 1 → within tolerance
   });
 
+  it('reports endpoint-MEASURED decode speed when the endpoint provides generation stats', async () => {
+    setAdapterOverride(
+      new StatsAdapter('{"engagement":2,"expression":"happy","note":"x"}', {
+        usage: { promptTokens: 800, completionTokens: 30 },
+        // The endpoint says it decoded in 0.5s (excludes the big prompt's prefill).
+        stats: { tokensPerSecond: 60, generationTimeSec: 0.5 },
+      }),
+    );
+    const res = await runBenchCase({ caseId: 'judge_turn_good', llmPlayer: false, dialogueTurns: 4 });
+    expect(res.ok).toBe(true);
+    expect(res.speedMeasured).toBe(true);
+    // 30 tokens over the reported 0.5s of DECODE time = 60 tok/s — NOT tokens/round-trip.
+    expect(res.genTimeMs).toBeCloseTo(500, 5);
+    expect(res.tokensPerSec).toBeCloseTo(60, 5);
+  });
+
+  it('falls back to end-to-end latency for tok/sec when the endpoint reports no generation stats', async () => {
+    setAdapterOverride(
+      new StatsAdapter('{"engagement":2,"expression":"happy","note":"x"}', {
+        usage: { promptTokens: 800, completionTokens: 30 },
+      }),
+    );
+    const res = await runBenchCase({ caseId: 'judge_turn_good', llmPlayer: false, dialogueTurns: 4 });
+    expect(res.ok).toBe(true);
+    // No stats → the speed is an end-to-end estimate, flagged so the UI can mark it.
+    expect(res.speedMeasured).toBe(false);
+    // Decode time falls back to the round-trip latency (never the 0.5s a stats block would give).
+    expect(res.genTimeMs).toBe(res.totalLatencyMs);
+  });
+
   it('scores against the built-in default baseline when the user has not saved one', async () => {
     setAdapterOverride(new ScriptedAdapter(['{"engagement":-2,"expression":"uncomfortable","note":"x"}']));
     const res = await runBenchCase({ caseId: 'judge_turn_bad', llmPlayer: false, dialogueTurns: 4 });
@@ -200,6 +268,68 @@ describe('bench runner', () => {
     const res = await runBenchCase({ caseId: 'gen_feed_comment', llmPlayer: false, dialogueTurns: 4 });
     expect(res.ok).toBe(false);
     expect(res.error.toLowerCase()).toContain('tone');
+  });
+
+  it('FAILS profile generation when a required field (physicalDesires) comes back empty', async () => {
+    // The exact shape the user flagged: every field filled EXCEPT physicalDesires: [].
+    setAdapterOverride(
+      new ScriptedAdapter([
+        JSON.stringify({
+          appearance: 'Weather-lined and solid, with a salt-and-pepper beard and paint-stained hands.',
+          textingStyle: 'Minimalist and abrupt; short full sentences, precise punctuation, no emojis.',
+          onlinePersona: 'Posts quiet weather observations and dry, world-weary one-liners.',
+          loveLanguage: 'Quality Time',
+          physicalNeeds: ['the smell of salt and brine', 'a strong cup of black coffee'],
+          physicalDesires: [],
+          physicalDislikes: ['overly bright lights', 'crowded noisy spaces'],
+          insecurities: ['that his silence reads as coldness'],
+          quirks: ['traces the grain of wooden surfaces'],
+        }),
+      ]),
+    );
+    const res = await runBenchCase({ caseId: 'gen_profile', llmPlayer: false, dialogueTurns: 4 });
+    expect(res.ok).toBe(false);
+    expect(res.error.toLowerCase()).toContain('physicaldesires');
+  });
+
+  it('PASSES profile generation when every requested field is populated', async () => {
+    setAdapterOverride(
+      new ScriptedAdapter([
+        JSON.stringify({
+          appearance: 'Weather-lined and solid, with a salt-and-pepper beard and paint-stained hands.',
+          textingStyle: 'Minimalist and abrupt; short full sentences, precise punctuation, no emojis.',
+          onlinePersona: 'Posts quiet weather observations and dry, world-weary one-liners.',
+          loveLanguage: 'Quality Time',
+          physicalNeeds: ['the smell of salt and brine'],
+          physicalDesires: ['a steady, weathered hand to hold'],
+          physicalDislikes: ['overly bright lights'],
+          insecurities: ['that his silence reads as coldness'],
+          quirks: ['traces the grain of wooden surfaces'],
+        }),
+      ]),
+    );
+    const res = await runBenchCase({ caseId: 'gen_profile', llmPlayer: false, dialogueTurns: 4 });
+    expect(res.ok).toBe(true);
+  });
+
+  it('FAILS list-output generations that return an empty list they were handed material for', async () => {
+    // market-news color: 2 movers handed in, but it narrated none.
+    setAdapterOverride(new ScriptedAdapter(['{"items":[]}']));
+    const news = await runBenchCase({ caseId: 'gen_market_news', llmPlayer: false, dialogueTurns: 4 });
+    expect(news.ok).toBe(false);
+    expect(news.error.toLowerCase()).toContain('items');
+
+    // ex-fact extraction: the fixture states clear ex-facts, yet it extracted none.
+    setAdapterOverride(new ScriptedAdapter(['{"exName":null,"facts":[]}']));
+    const facts = await runBenchCase({ caseId: 'gen_ex_fact', llmPlayer: false, dialogueTurns: 4 });
+    expect(facts.ok).toBe(false);
+    expect(facts.error.toLowerCase()).toContain('facts');
+
+    // in-world emails: asked for 1–2, produced none.
+    setAdapterOverride(new ScriptedAdapter(['{"emails":[]}']));
+    const mail = await runBenchCase({ caseId: 'gen_email_batch', llmPlayer: false, dialogueTurns: 4 });
+    expect(mail.ok).toBe(false);
+    expect(mail.error.toLowerCase()).toContain('email');
   });
 
   it('PASSES from-text character generation when a fleshed-out draft comes back', async () => {
@@ -293,8 +423,8 @@ describe('bench persistence + aggregate', () => {
   it('computeAggregate averages judge closeness only over scored cases', () => {
     const base = {
       label: '', group: '', kind: 'judge' as const, calls: [], promptTokens: 10, completionTokens: 5,
-      totalLatencyMs: 100, attempts: 1, tokensPerSec: null, tokensEstimated: false, output: '', transcript: [],
-      repetitionMax: null, repetitionAvg: null,
+      totalLatencyMs: 100, attempts: 1, tokensPerSec: null, tokensEstimated: false, genTimeMs: 0, speedMeasured: false, output: '', transcript: [],
+      repetitionMax: null, repetitionAvg: null, structuredMode: null,
     };
     const agg = computeAggregate([
       { ...base, caseId: 'a', ok: true, error: '', comparison: { human: { engagement: 2 }, llm: { engagement: 2 }, closeness: 1, agree: null, pass: true, rows: [] } },
@@ -306,5 +436,64 @@ describe('bench persistence + aggregate', () => {
     expect(agg.failed).toBe(1);
     expect(agg.judgeCases).toBe(2);
     expect(agg.avgCloseness).toBeCloseTo(0.75, 5);
+  });
+
+  it('computeAggregate counts structured-output fallbacks by final mode (a fallback is not a failure)', () => {
+    const base = {
+      label: '', group: '', kind: 'generation' as const, calls: [], promptTokens: 10, completionTokens: 5,
+      totalLatencyMs: 100, attempts: 1, tokensPerSec: null, tokensEstimated: false, genTimeMs: 0, speedMeasured: false, output: '', transcript: [],
+      repetitionMax: null, repetitionAvg: null, comparison: null,
+    };
+    const agg = computeAggregate([
+      // ran at the requested mode — no fallback
+      { ...base, caseId: 'a', ok: true, error: '', structuredMode: { requested: 'json_schema', final: 'json_schema' } },
+      // fell back one step, still passed
+      { ...base, caseId: 'b', ok: true, error: '', structuredMode: { requested: 'json_schema', final: 'json_object' } },
+      // fell back two steps, still passed
+      { ...base, caseId: 'c', ok: true, error: '', structuredMode: { requested: 'json_schema', final: 'prompt_only' } },
+      // another to prompt_only
+      { ...base, caseId: 'd', ok: true, error: '', structuredMode: { requested: 'json_schema', final: 'prompt_only' } },
+      // free-text dialogue — no structured call at all
+      { ...base, caseId: 'e', ok: true, error: '', kind: 'dialogue' as const, structuredMode: null },
+    ]);
+    expect(agg.structuredFallbacks).toBe(3); // b, c, d
+    expect(agg.fallbackByMode).toEqual({ json_object: 1, prompt_only: 2 });
+    // fallbacks never inflate the failure count
+    expect(agg.failed).toBe(0);
+    expect(agg.passed).toBe(5);
+  });
+
+  it('computeAggregate bases avg tok/sec on decode time, not round-trip latency', () => {
+    const base = {
+      label: '', group: '', kind: 'generation' as const, calls: [], promptTokens: 200,
+      attempts: 1, tokensPerSec: 100, tokensEstimated: false, output: '', transcript: [],
+      repetitionMax: null, repetitionAvg: null, comparison: null, structuredMode: null,
+    };
+    // Two endpoint-measured cases. Round-trip latency is huge (prefill-heavy) but the
+    // decode time is small — the aggregate rate must follow decode time, so latency
+    // must NOT leak into avgTokensPerSec.
+    const agg = computeAggregate([
+      { ...base, caseId: 'a', ok: true, error: '', completionTokens: 100, totalLatencyMs: 9000, genTimeMs: 1000, speedMeasured: true },
+      { ...base, caseId: 'b', ok: true, error: '', completionTokens: 50, totalLatencyMs: 4000, genTimeMs: 500, speedMeasured: true },
+    ]);
+    // 150 tokens over 1.5s of DECODE = 100 tok/s — not 150 / 13s of round-trip.
+    expect(agg.avgTokensPerSec).toBeCloseTo(100, 5);
+    expect(agg.speedEstimated).toBe(false);
+  });
+
+  it('computeAggregate flags speed as estimated when a token-bearing case fell back to latency', () => {
+    const base = {
+      label: '', group: '', kind: 'generation' as const, calls: [], promptTokens: 10,
+      attempts: 1, tokensPerSec: null, tokensEstimated: false, output: '', transcript: [],
+      repetitionMax: null, repetitionAvg: null, comparison: null, structuredMode: null,
+    };
+    const agg = computeAggregate([
+      { ...base, caseId: 'a', ok: true, error: '', completionTokens: 40, totalLatencyMs: 800, genTimeMs: 800, tokensPerSec: 50, speedMeasured: false },
+      // an all-failed case (no tokens) must NOT trip the estimate flag on its own
+      { ...base, caseId: 'b', ok: false, error: 'boom', completionTokens: 0, totalLatencyMs: 500, genTimeMs: 0, speedMeasured: false },
+    ]);
+    expect(agg.speedEstimated).toBe(true);
+    // rate from the one token-bearing case's decode time: 40 / 0.8s = 50
+    expect(agg.avgTokensPerSec).toBeCloseTo(50, 5);
   });
 });

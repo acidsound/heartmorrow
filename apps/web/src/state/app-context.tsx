@@ -86,7 +86,7 @@ interface AppData {
   setActiveWorld: (id: string) => void;
   reloadWorlds: () => Promise<void>;
   refreshWorldState: () => Promise<void>;
-  sleep: () => Promise<SleepResponse | null>;
+  sleep: (expectedDay?: number) => Promise<SleepResponse | null>;
   // Mode + theme (client-side)
   creatorMode: boolean;
   setCreatorMode: (on: boolean) => void;
@@ -110,7 +110,7 @@ interface AppData {
    *  session, so the Date tab can show a spinner instead of flashing "plan a date"
    *  before it knows whether a date is already underway. */
   activeDateLoaded: boolean;
-  refreshActiveDate: () => Promise<void>;
+  refreshActiveDate: () => Promise<ActiveDate | null>;
   // Total reset
   resetProgress: () => Promise<void>;
 }
@@ -173,16 +173,19 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   // The active world's in-progress date, the single source of truth for resume +
   // action-locking. Refetched on world change; the Date page also drives explicit
   // refreshes as a date starts and ends.
-  const refreshActiveDate = useCallback(async () => {
+  const refreshActiveDate = useCallback(async (): Promise<ActiveDate | null> => {
     if (!activeWorldId) {
       setActiveDate(null);
       setActiveDateLoaded(true);
-      return;
+      return null;
     }
     try {
-      setActiveDate((await api.activeDate(activeWorldId)).date);
+      const date = (await api.activeDate(activeWorldId)).date;
+      setActiveDate(date);
+      return date;
     } catch {
       /* leave the last-known value on a transient error */
+      return null;
     } finally {
       setActiveDateLoaded(true);
     }
@@ -244,9 +247,9 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     void refreshActiveDate();
   }, [refreshActiveDate]);
 
-  const sleep = useCallback(async (): Promise<SleepResponse | null> => {
+  const sleep = useCallback(async (expectedDay?: number): Promise<SleepResponse | null> => {
     if (!activeWorldId) return null;
-    const res = await api.sleep(activeWorldId);
+    const res = await api.sleep(activeWorldId, expectedDay);
     setWorldState(res.state);
     setDayTick((t) => t + 1); // signal day-derived tabs to refetch
     await reloadPlayer();

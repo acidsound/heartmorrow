@@ -499,23 +499,6 @@ export const sessionsRepo = {
     );
     return s;
   },
-  /**
-   * Atomically mark a session ended, but ONLY if it wasn't already. Returns true
-   * iff THIS call flipped it (so the caller may apply its one-time end effects —
-   * stamina/money spend, evaluation deltas, walkout penalty), false if it was
-   * already ended/gone. The single conditional UPDATE is the concurrency guard for
-   * endSession / attemptWalkout / maybeLeaveForLostInterest racing across an LLM
-   * await (two end-requests, a walkout racing a manual end, etc.).
-   */
-  claimEnd(id: string): boolean {
-    return (
-      getDb().run(
-        'UPDATE conversation_sessions SET ended = 1, updated_at = ? WHERE id = ? AND ended = 0',
-        Date.now(),
-        id,
-      ).changes === 1
-    );
-  },
   delete(id: string): void {
     getDb().run('DELETE FROM conversation_sessions WHERE id = ?', id);
   },
@@ -554,6 +537,9 @@ export const messagesRepo = {
       m.id, m.sessionId, m.role, m.text, j(m.metadata), m.createdAt,
     );
     return m;
+  },
+  delete(id: string): void {
+    getDb().run('DELETE FROM messages WHERE id = ?', id);
   },
 };
 
@@ -925,6 +911,9 @@ export const textMessagesRepo = {
       m.body, m.status, m.attachment ? j(m.attachment) : null, m.deliveredAt, m.id,
     );
     return m;
+  },
+  delete(id: string): void {
+    getDb().run('DELETE FROM text_messages WHERE id = ?', id);
   },
 };
 
@@ -2060,6 +2049,19 @@ export const sessionRapportRepo = {
       `INSERT INTO session_rapport (session_id,rapport,updated_at) VALUES (?,?,?)
        ON CONFLICT(session_id) DO UPDATE SET rapport = excluded.rapport, updated_at = excluded.updated_at`,
       sessionId, rapport, updatedAt,
+    );
+  },
+  /** The last live expression (portrait mood) held for this session, or undefined. */
+  getExpression(sessionId: string): string | undefined {
+    const r = getDb().get<Row>('SELECT expression FROM session_rapport WHERE session_id = ?', sessionId);
+    return r && r.expression != null ? String(r.expression) : undefined;
+  },
+  /** Update the stored expression. The rapport row is seeded before the first judged
+   *  turn, so an UPDATE always lands; if it somehow hasn't, this is a harmless no-op. */
+  setExpression(sessionId: string, expression: string, updatedAt: number): void {
+    getDb().run(
+      'UPDATE session_rapport SET expression = ?, updated_at = ? WHERE session_id = ?',
+      expression, updatedAt, sessionId,
     );
   },
   delete(sessionId: string): void {

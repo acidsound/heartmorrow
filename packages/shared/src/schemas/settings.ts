@@ -18,8 +18,40 @@ export const EndpointModeSchema = z.enum([
   'responses', // POST {baseUrl}/responses  (reserved — adapter interface left open)
   'anthropic', // POST {baseUrl}/messages — Anthropic Messages API shape (api.anthropic.com or any compatible proxy/gateway)
   'lmstudio', // POST {baseUrl}/chat/completions on LM Studio's NATIVE REST API (baseUrl ending /api/v0) — richer model metadata + per-response stats
+  'ollama', // POST {baseUrl}/api/chat on Ollama's NATIVE API (baseUrl = server root) — thinking toggle + reasoning level, /api/tags listing
+  'koboldcpp', // POST {baseUrl}/api/v1/generate on KoboldCpp's NATIVE API (baseUrl = server root) — a text-completion API; messages are rendered with a chat template
 ]);
 export type EndpointMode = z.infer<typeof EndpointModeSchema>;
+
+/**
+ * Ollama's `think` request control (endpointMode 'ollama' only). Maps to the
+ * native API's `think` field, which toggles a model's reasoning trace and — for
+ * models that expose trace LEVELS (e.g. gpt-oss) — tunes its depth:
+ *  - `default`  → omit the field entirely (the model's own behavior; the only
+ *                 safe choice for models that don't support thinking, which
+ *                 otherwise reject the parameter)
+ *  - `off`/`on` → `think: false` / `think: true`
+ *  - `low`…`max`→ the level string (ignored as a boolean by level-only models)
+ * Ignored by every other endpoint mode.
+ */
+export const OllamaThinkSchema = z.enum(['default', 'off', 'on', 'low', 'medium', 'high', 'max']);
+export type OllamaThink = z.infer<typeof OllamaThinkSchema>;
+
+/**
+ * Instruction template used to render chat messages into a single prompt for the
+ * KoboldCpp native API (endpointMode 'koboldcpp' only). KoboldCpp's `/api/v1/generate`
+ * is a raw TEXT-COMPLETION endpoint — it has no notion of roles — so the front end
+ * owns the prompt format. Pick the one matching your loaded model's training format:
+ *  - `alpaca`  → `### Instruction:` / `### Response:` (broadly compatible default)
+ *  - `chatml`  → `<|im_start|>role … <|im_end|>` (Qwen, many finetunes)
+ *  - `llama3`  → `<|start_header_id|>role<|end_header_id|>` (Llama 3/3.x Instruct)
+ *  - `vicuna`  → `USER:` / `ASSISTANT:`
+ *  - `mistral` → `[INST] … [/INST]` (system folded into the first instruction)
+ *  - `plain`   → no role markers, messages joined as-is (base models / custom)
+ * Ignored by every other endpoint mode.
+ */
+export const KoboldTemplateSchema = z.enum(['alpaca', 'chatml', 'llama3', 'vicuna', 'mistral', 'plain']);
+export type KoboldTemplate = z.infer<typeof KoboldTemplateSchema>;
 
 /**
  * One model advertised by the endpoint's listing. `id` is always present; the
@@ -92,6 +124,18 @@ const llmConnectionShape = {
    * API revision. Ignored by every other endpoint mode.
    */
   anthropicVersion: z.string().default('2023-06-01'),
+  /**
+   * Ollama reasoning control, only used when `endpointMode` is 'ollama' (see
+   * {@link OllamaThinkSchema}). Defaults to 'default' (the field is omitted), so an
+   * existing install and every non-Ollama endpoint behave exactly as before.
+   */
+  ollamaThink: OllamaThinkSchema.default('default'),
+  /**
+   * Chat-template preset for the KoboldCpp native API, only used when `endpointMode`
+   * is 'koboldcpp' (see {@link KoboldTemplateSchema}). Defaults to 'alpaca'. Ignored
+   * by every other endpoint mode, so an existing install is unaffected.
+   */
+  koboldTemplate: KoboldTemplateSchema.default('alpaca'),
   maxRetries: z.number().int().min(0).max(10).default(3),
 } as const;
 

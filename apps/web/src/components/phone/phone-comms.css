@@ -39,6 +39,10 @@
   font-size: 1.02rem;
   line-height: 1.1;
   max-width: 200px;
+  /* User-entered contact names: ellipsize at the cap instead of overflowing the bar. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pcom-iconbtn {
   flex-shrink: 0;
@@ -169,6 +173,9 @@
 }
 .pcom-unread .pcom-when { color: var(--brass); }
 .pcom-preview {
+  /* It's a <span>: without display:block the overflow/ellipsis pair below is
+     ignored (inline boxes can't clip), and long previews ran hard off-screen. */
+  display: block;
   margin-top: 2px;
   font-size: 0.81rem;
   color: var(--text-mute);
@@ -343,6 +350,39 @@
   border: 1px solid var(--border);
   border-bottom-left-radius: 5px;
   box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+/* "Regenerate this reply" — a small, quiet control under the character's last text.
+   Rewrites the prose without changing the relationship. */
+.pcom-regen-btn {
+  position: relative;
+  margin-top: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s ease, color 0.15s ease, transform 0.2s ease;
+}
+/* Invisible hit-slop so the effective touch target clears the ~44px floor without
+   inflating the visible 22px circle (mirrors .pbar-iconbtn::after). */
+.pcom-regen-btn::after {
+  content: '';
+  position: absolute;
+  inset: -11px;
+}
+.pcom-regen-btn:hover,
+.pcom-regen-btn:focus-visible {
+  opacity: 1;
+  color: var(--accent);
+  transform: rotate(-45deg);
 }
 
 /* Gift attachment — a brass keepsake offer. */
