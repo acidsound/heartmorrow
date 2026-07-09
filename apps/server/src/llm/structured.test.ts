@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { callStructuredLlm } from './structured';
 import { ScriptedAdapter, testSettings } from '../test/helpers';
 import type { ChatAdapter, ChatRequest, ChatResult, LlmModelInfo } from './types';
+import { runWithLocale } from '../i18n/locale';
 
 const Schema = z.object({ mood: z.string(), score: z.number().int() });
 
@@ -104,5 +105,22 @@ describe('callStructuredLlm', () => {
     });
     // Strict JSON.parse fails on prose-wrapped JSON; we do NOT extract it.
     expect(res.ok).toBe(false);
+  });
+
+  it('applies the request language to structured player-facing text while preserving JSON rules', async () => {
+    const adapter = new ScriptedAdapter([JSON.stringify({ mood: '기쁨', score: 5 })]);
+    const res = await runWithLocale('ko-KR', () =>
+      callStructuredLlm(Schema, [{ role: 'user', content: 'task' }], {
+        settings: testSettings({ maxRetries: 0 }),
+        task: 'unit test',
+        adapter,
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+    const messages = adapter.seenRequests[0]?.messages ?? [];
+    expect(messages[0]?.role).toBe('system');
+    expect(messages[0]?.content).toContain('Korean (ko)');
+    expect(messages.some((message) => String(message.content).includes('JSON schema'))).toBe(true);
   });
 });

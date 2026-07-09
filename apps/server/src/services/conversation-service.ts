@@ -104,6 +104,7 @@ import {
   type PromptContext,
 } from '../prompt/prompt-builder';
 import { callStructuredLlm } from '../llm/structured';
+import { localizedText, withLocaleInstruction } from '../i18n/locale';
 import { getAdapter } from '../llm/provider';
 import type { ChatMessage } from '../llm/types';
 import { ThinkStripper, stripThink } from '../lib/think-filter';
@@ -156,7 +157,12 @@ export function createSession(input: ConversationCreate): ConversationSession {
     }
     const avail = getCharacterAvailability(character.worldId, day, character.id);
     if (!avail.available) {
-      throw badRequest(`${character.name} ${avail.reason ?? 'is unavailable today'}.`);
+      throw badRequest(
+        localizedText(
+          `${character.name} ${avail.reason ?? 'is unavailable today'}.`,
+          `${character.name}: ${avail.reason ?? '오늘은 만날 수 없습니다'}.`,
+        ),
+      );
     }
     assertCanAct(character.worldId);
     // Soft money gate: you can't take someone somewhere you can't afford (free
@@ -486,7 +492,7 @@ export async function generateReply(sessionId: string): Promise<Message> {
   const chatMessages = buildDialogueRequest(sessionId);
   const adapter = getAdapter(settings);
   const result = await adapter.chat({
-    messages: chatMessages,
+    messages: withLocaleInstruction(chatMessages),
     temperature: settings.temperature,
     maxTokens: settings.maxTokens,
   });
@@ -517,7 +523,7 @@ export async function streamReply(
   // its typing indicator until the real reply begins.
   const stripper = new ThinkStripper();
   const { finishReason } = await adapter.streamChat(
-    { messages: chatMessages, temperature: settings.temperature, maxTokens: settings.maxTokens },
+    { messages: withLocaleInstruction(chatMessages), temperature: settings.temperature, maxTokens: settings.maxTokens },
     (rawDelta) => {
       const visible = stripper.push(rawDelta);
       if (visible) onDelta(visible);
@@ -592,7 +598,7 @@ export async function openConversation(sessionId: string): Promise<Message | nul
       });
     }
     const adapter = getAdapter(settings);
-    const res = await adapter.chat({ messages, temperature: settings.temperature, maxTokens: settings.maxTokens });
+    const res = await adapter.chat({ messages: withLocaleInstruction(messages), temperature: settings.temperature, maxTokens: settings.maxTokens });
     const text = stripThink(res.content).trim();
     if (!text) return null;
     const message = firstMeeting
@@ -607,8 +613,8 @@ export async function openConversation(sessionId: string): Promise<Message | nul
 
 // --- Phase 3: walkouts + jealousy -------------------------------------------
 
-const HOSTILE_RE = /\b(fuck\s*you|fuck\s*off|screw\s*you|shut\s*up|stupid|idiot|hate\s*you|bitch|asshole|loser|ugly|disgusting|pathetic|worthless)\b/i;
-const PROPOSITION_RE = /\b(sleep\s*with|have\s*sex|hook\s*up|hookup|come\s*(?:over|home)|in\s*bed|nudes?|sext|strip|take.*clothes\s*off)\b/i;
+const HOSTILE_RE = /(?:\b(?:fuck\s*you|fuck\s*off|screw\s*you|shut\s*up|stupid|idiot|hate\s*you|bitch|asshole|loser|ugly|disgusting|pathetic|worthless)\b|꺼져|닥쳐|멍청(?:이|아)?|바보|싫어해|혐오해|개새끼|병신|찌질이|못생겼|역겨워|한심해|쓸모없)/i;
+const PROPOSITION_RE = /(?:\b(?:sleep\s*with|have\s*sex|hook\s*up|hookup|come\s*(?:over|home)|in\s*bed|nudes?|sext|strip|take.*clothes\s*off)\b|같이\s*자|섹스|자고\s*갈래|우리\s*집에\s*올래|너네\s*집에\s*갈래|누드|야한\s*사진|옷\s*벗)/i;
 
 /** Cheap no-LLM screen: consider a walkout only for clearly hostile messages,
  *  or crude propositions when the relationship is not warm. When the player has
@@ -847,12 +853,17 @@ export async function maybeLeaveForLostInterest(sessionId: string, signal?: Abor
         `Not cruel, just done — no questions, and no plans to meet again.`,
     });
     const adapter = getAdapter(settings);
-    const res = await adapter.chat({ messages, temperature: settings.temperature, maxTokens: 300 }, signal);
+    const res = await adapter.chat({ messages: withLocaleInstruction(messages), temperature: settings.temperature, maxTokens: 300 }, signal);
     line = stripThink(res.content).trim();
   } catch {
     line = '';
   }
-  if (!line) line = `Hey — it's been a long week and I'm pretty wiped. I think I'm gonna head out. Take care, okay?`;
+  if (!line) {
+    line = localizedText(
+      `Hey — it's been a long week and I'm pretty wiped. I think I'm gonna head out. Take care, okay?`,
+      `저기… 이번 주가 좀 길어서 많이 지쳤어. 오늘은 이만 가볼게. 잘 들어가, 알았지?`,
+    );
+  }
 
   // Apply the soft-leave's penalty + a memory of the fizzle, then voice the goodbye —
   // but DON'T end the session: like a natural farewell, the CLIENT runs the normal

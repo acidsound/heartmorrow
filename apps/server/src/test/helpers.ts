@@ -17,9 +17,11 @@ export function testSettings(overrides: Partial<LlmSettings> = {}): LlmSettings 
 export class ScriptedAdapter implements ChatAdapter {
   readonly name = 'scripted';
   calls = 0;
+  seenRequests: ChatRequest[] = [];
   constructor(private readonly responses: string[]) {}
 
-  async chat(_req: ChatRequest): Promise<ChatResult> {
+  async chat(req: ChatRequest): Promise<ChatResult> {
+    this.seenRequests.push(req);
     const idx = Math.min(this.calls, this.responses.length - 1);
     this.calls += 1;
     return { content: this.responses[idx] ?? '' };

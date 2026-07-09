@@ -1,6 +1,7 @@
 import { AVAILABILITY_REASONS, UNAVAILABLE_CHANCE, DEFAULT_PLAYER_ID, isMemorialized } from '@dsim/shared';
 import { charactersRepo, relationshipsRepo, worldStatesRepo } from '../db/repositories';
 import { hashFloat } from '../lib/seeded-random';
+import { getRequestLocale } from '../i18n/locale';
 
 /**
  * Per-(world, day) character availability ("Do Not Disturb"). Deterministic —
@@ -17,7 +18,20 @@ export interface Availability {
 
 function reasonFor(worldId: string, day: number, characterId: string): string {
   const idx = Math.floor(hashFloat(`${worldId}|${day}|${characterId}|reason`) * AVAILABILITY_REASONS.length);
-  return AVAILABILITY_REASONS[Math.min(idx, AVAILABILITY_REASONS.length - 1)]!;
+  const safeIndex = Math.min(idx, AVAILABILITY_REASONS.length - 1);
+  if (getRequestLocale() === 'ko') {
+    return [
+      '오늘은 일에 파묻혀 있습니다',
+      '내일까지 다른 지역에 있습니다',
+      '혼자 재충전할 시간이 필요합니다',
+      '가족 일로 바쁩니다',
+      '몸 상태가 좋지 않습니다',
+      '오늘 일정이 꽉 차 있습니다',
+      '개인적인 일을 처리하느라 연락이 어렵습니다',
+      '오늘은 조용히 혼자 보내고 싶어 합니다',
+    ][safeIndex]!;
+  }
+  return AVAILABILITY_REASONS[safeIndex]!;
 }
 
 /** A memorialized character is permanently gone — never available. */
@@ -34,7 +48,11 @@ export function getWorldAvailability(worldId: string, day: number): Availability
   const rolls = characters.map((c) => ({ id: c.id, roll: hashFloat(`${worldId}|${day}|${c.id}`), memorial: isMemorializedChar(c.id) }));
   const result: Availability[] = rolls.map(({ id, roll, memorial }) =>
     memorial
-      ? { characterId: id, available: false, reason: 'is no longer with us' }
+      ? {
+          characterId: id,
+          available: false,
+          reason: getRequestLocale() === 'ko' ? '더 이상 이 세계에 없습니다' : 'is no longer with us',
+        }
       : roll < UNAVAILABLE_CHANCE
         ? { characterId: id, available: false, reason: reasonFor(worldId, day, id) }
         : { characterId: id, available: true, reason: null },

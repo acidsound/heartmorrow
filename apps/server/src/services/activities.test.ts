@@ -9,6 +9,7 @@ import { getOrCreatePlayer, grantCareerXp, getSkillLevel } from './player-servic
 import { getRelationship } from './relationship-service';
 import { applyRelationshipChange } from './stat-service';
 import { playerIdForWorld } from '../lib/ids';
+import { runWithLocale } from '../i18n/locale';
 
 beforeEach(() => resetDb());
 
@@ -43,6 +44,19 @@ describe('availability (Do Not Disturb)', () => {
       }
     }
     expect(foundUnavailable).toBe(true);
+  });
+
+  it('returns Korean availability reasons for a Korean request', () => {
+    const { world } = seedWorldAndCharacter();
+    createCharacter({ worldId: world.id, name: 'Second', age: 25, datingStats: DEFAULT_DATING_STATS });
+    const reason = runWithLocale('ko-KR', () => {
+      for (let day = 1; day <= 60; day += 1) {
+        const unavailable = getWorldAvailability(world.id, day).find((entry) => !entry.available);
+        if (unavailable?.reason) return unavailable.reason;
+      }
+      return '';
+    });
+    expect(reason).toMatch(/[가-힣]/);
   });
 });
 

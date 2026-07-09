@@ -113,8 +113,17 @@ import type {
   WorldNoteUpdate,
   WorldUpdate,
 } from '@dsim/shared';
+import i18n from '../i18n';
 
 const BASE = '/api';
+
+/** Every request carries the UI locale so server-side LLM generation follows the
+ * same language immediately, including streaming and multipart endpoints. */
+function localeHeaders(headers?: HeadersInit): Headers {
+  const result = new Headers(headers);
+  result.set('X-Heartmorrow-Locale', i18n.resolvedLanguage ?? i18n.language ?? 'en');
+  return result;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -128,12 +137,12 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers: Record<string, string> = { ...(options.headers as Record<string, string> | undefined) };
+  const headers = localeHeaders(options.headers);
   // Only declare a JSON content-type when we actually send a JSON body. A POST
   // with `Content-Type: application/json` but no body is rejected by Fastify
   // ("Body cannot be empty when content-type is set to 'application/json'").
   if (options.body != null && !(options.body instanceof FormData)) {
-    headers['Content-Type'] = 'application/json';
+    headers.set('Content-Type', 'application/json');
   }
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
   if (!res.ok) {
@@ -173,7 +182,7 @@ export function assetUrl(relativePath: string): string {
  * server's Content-Disposition filename, falling back to a supplied name.
  */
 async function downloadShareFile(path: string, init: RequestInit, fallbackName: string): Promise<void> {
-  const res = await fetch(`${BASE}${path}`, init);
+  const res = await fetch(`${BASE}${path}`, { ...init, headers: localeHeaders(init.headers) });
   if (!res.ok) {
     let message = res.statusText;
     try {
@@ -200,7 +209,7 @@ async function downloadShareFile(path: string, init: RequestInit, fallbackName: 
 async function postShareFile<T>(path: string, file: File): Promise<T> {
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch(`${BASE}${path}`, { method: 'POST', body: form });
+  const res = await fetch(`${BASE}${path}`, { method: 'POST', body: form, headers: localeHeaders() });
   if (!res.ok) {
     let message = res.statusText;
     let details: unknown;
@@ -248,7 +257,7 @@ export async function streamChat(
 ): Promise<void> {
   const res = await fetch(`${BASE}/conversations/${sessionId}/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: localeHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(intent ? { text, intent } : { text }),
     signal,
   });
@@ -272,6 +281,7 @@ export async function streamRetry(
 ): Promise<void> {
   const res = await fetch(`${BASE}/conversations/${sessionId}/retry-stream`, {
     method: 'POST',
+    headers: localeHeaders(),
     signal,
   });
   if (!res.ok || !res.body) {
@@ -480,7 +490,7 @@ export const api = {
     if (altText) form.append('altText', altText);
     if (tags) form.append('tags', tags);
     form.append('file', file);
-    const res = await fetch(`${BASE}/assets`, { method: 'POST', body: form });
+    const res = await fetch(`${BASE}/assets`, { method: 'POST', body: form, headers: localeHeaders() });
     if (!res.ok) {
       let message = res.statusText;
       try {

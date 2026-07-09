@@ -4,6 +4,7 @@ import { resolveLlmRole, type LlmRole, type LlmSettings, type StructuredResult }
 import { parseJsonStrict, JsonParseError } from '../lib/json';
 import { getAdapter } from './provider';
 import type { ChatAdapter, ChatMessage, ResponseFormat, TokenUsage } from './types';
+import { withLocaleInstruction } from '../i18n/locale';
 
 /**
  * Central structured-output caller. This is the ONLY way game-state-affecting
@@ -165,6 +166,7 @@ export async function callStructuredLlm<S extends z.ZodTypeAny>(
   options: StructuredCallOptions,
 ): Promise<StructuredResult<z.output<S>>> {
   const { task } = options;
+  const localizedMessages = withLocaleInstruction(messages);
   // Resolve the effective connection for this role (endpoint/model/decoding). An
   // injected adapter (tests) bypasses routing, so the base config still drives the
   // non-transport knobs there. Every reference below is to the RESOLVED settings.
@@ -204,7 +206,7 @@ export async function callStructuredLlm<S extends z.ZodTypeAny>(
     // Built per attempt because the mode can downgrade across retries (and the
     // omit-schema optimization only applies while we're actually in json_schema mode).
     const baseInstruction = buildBaseInstruction(mode, settings.omitSchemaInPrompt, schemaText);
-    const attemptMessages: ChatMessage[] = [...messages, baseInstruction];
+    const attemptMessages: ChatMessage[] = [...localizedMessages, baseInstruction];
     if (attempt > 0) {
       attemptMessages.push({
         role: 'user',

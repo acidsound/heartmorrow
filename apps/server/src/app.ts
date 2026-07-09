@@ -26,6 +26,7 @@ import { benchRoutes } from './routes/bench';
 import { phoneRoutes } from './routes/phone';
 import { activityRoutes } from './routes/activities';
 import './services/phone-bootstrap'; // registers world-clock → phone lifecycle hooks
+import { runWithLocale } from './i18n/locale';
 
 export interface BuildAppOptions {
   logger?: boolean;
@@ -43,6 +44,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const app = Fastify({
     logger: options.logger ?? true,
     bodyLimit: 64 * 1024 * 1024, // allow large import bundles
+  });
+
+  // Make the browser's selected language available deep in services without
+  // threading a locale argument through every route. The callback form keeps
+  // concurrent requests isolated via AsyncLocalStorage.
+  app.addHook('onRequest', (req, _reply, done) => {
+    runWithLocale(req.headers['x-heartmorrow-locale'] ?? req.headers['accept-language'], done);
   });
 
   // CORS is intentionally permissive for LOCAL DEV only (explicit origin list).
